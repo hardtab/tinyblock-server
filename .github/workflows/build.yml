@@ -18,7 +18,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up pinned Godot and export templates
         run: |
@@ -65,7 +65,7 @@ jobs:
             > tinyblock-server-linux-x86_64.tar.gz.sha256
 
       - name: Upload release-ready artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: tinyblock-server-linux-x86_64
           path: |
@@ -82,7 +82,7 @@ jobs:
       contents: write
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: tinyblock-server-linux-x86_64
           path: release
