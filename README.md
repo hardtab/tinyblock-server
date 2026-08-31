@@ -100,6 +100,15 @@ Use `--world <id>` to keep the same world across restarts.
 
 Progression, items, and world state stay on the server. The official Tiny Block servers do not store, back up, or synchronize community world saves.
 
+## Pelican and Pterodactyl
+
+Ready-to-import hosting panel profiles are available in [`pelican-eggs/tiny-block`](./pelican-eggs/tiny-block):
+
+- `egg-tiny-block-server.json` for Pelican Panel.
+- `egg-pterodactyl-tiny-block-server.json` for Pterodactyl Panel.
+
+Both profiles download and verify the selected GitHub release, expose the world mode and player limit as panel variables, and keep saves in persistent server storage.
+
 ## Project structure
 
 ```
