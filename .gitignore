@@ -1,0 +1,27 @@
+# Godot compiled imports (not the .import metadata files)
+.godot/import/
+.godot/global_script_class_cache.cfg
+.godot/uid_cache.bin
+
+# Build output
+build/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Export
+*.translation
+android/
+ios/
+.godot/

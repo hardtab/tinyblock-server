@@ -1,0 +1,36 @@
+# systemd unit for Tiny Block dedicated server
+# Copy to /etc/systemd/system/tinyblock-server.service and edit paths.
+#
+# Usage:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now tinyblock-server
+#   journalctl -u tinyblock-server -f
+
+[Unit]
+Description=Tiny Block dedicated server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tinyblock
+Group=tinyblock
+WorkingDirectory=/opt/tinyblock-server
+ExecStart=/opt/tinyblock-server/tinyblock-server.x86_64 \
+    --tinyblock-server \
+    --world world_community_1 \
+    --world-name "My Community Server" \
+    --world-mode skyblock \
+    --max-players 16
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

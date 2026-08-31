@@ -1,0 +1,43 @@
+; Tiny Block dedicated server configuration.
+; This project file is curated for the open-source server build.
+; Only the autoloads and settings needed for headless operation are included.
+
+config_version=5
+
+[application]
+
+config/name="Tiny Block Server"
+config/description="Headless Tiny Block dedicated server. Reuses the authoritative world simulation and multiplayer host from the official client."
+config/version="1.3.1"
+run/main_scene="res://scenes/server_main.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility", "dedicated_server")
+
+[autoload]
+
+ArtAssets="*res://scripts/art_assets.gd"
+BlockDefs="*res://scripts/block_defs.gd"
+Sfx="*res://scripts/sfx.gd"
+BackendClient="*res://scripts/backend_client.gd"
+MultiplayerClient="*res://scripts/multiplayer_client.gd"
+PlayerProfile="*res://scripts/player_profile.gd"
+Analytics="*res://scripts/analytics.gd"
+
+[display]
+
+window/size/viewport_width=960
+window/size/viewport_height=540
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+
+textures/canvas_textures/default_texture_filter=0
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
+2d/snap/snap_2d_transforms_to_pixel=true
+2d/snap/snap_2d_vertices_to_pixel=true
+
+[tinyblock]
+
+backend_api_url="https://4fxrau4ca7.execute-api.us-east-1.amazonaws.com"
