@@ -1,6 +1,26 @@
-# Tiny Block Server
+<p align="center">
+  <img src="assets/readme/tiny-block-server-hero.png" alt="Tiny Block Server — two players exploring a shared block world connected to dedicated servers" width="100%">
+</p>
 
-Headless dedicated server for **Tiny Block** — a Minecraft-style sandbox game built with Godot 4.
+<p align="center">
+  <a href="https://tinyblock.nosuchgames.com/play/">
+    <img src="assets/readme/tiny-block-icon.png" alt="Tiny Block" width="96" height="96">
+  </a>
+</p>
+
+<p align="center">
+  Headless dedicated server for <strong>Tiny Block</strong> — a living 2D sandbox game built with Godot 4.
+</p>
+
+<p align="center">
+  <strong>
+    <a href="https://tinyblock.nosuchgames.com/play/">Play on Web</a>
+    ·
+    <a href="https://apps.apple.com/us/app/tiny-block-one-block-skyblock/id6793160455">Download on the App Store</a>
+    ·
+    <a href="https://play.google.com/store/apps/details?id=com.nosuchgames.tinyblock">Get it on Google Play</a>
+  </strong>
+</p>
 
 This repository contains the curated open-source dedicated server source code. It reuses the authoritative world simulation, multiplayer host, persistence, and backend signalling from the official Tiny Block client without including private store, analytics, advertising, or platform-specific code.
 
