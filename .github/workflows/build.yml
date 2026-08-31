@@ -1,0 +1,96 @@
+name: Build Linux Dedicated Server
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+env:
+  GODOT_VERSION: 4.7.1
+
+jobs:
+  build:
+    name: Test and build server
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Godot and export templates
+        run: |
+          set -euo pipefail
+          release="${GODOT_VERSION}-stable"
+          base="https://github.com/godotengine/godot-builds/releases/download/${release}"
+          curl -fsSLO "${base}/Godot_v${release}_linux.x86_64.zip"
+          unzip -q "Godot_v${release}_linux.x86_64.zip"
+          mv "Godot_v${release}_linux.x86_64" godot
+          chmod +x godot
+          curl -fsSLO "${base}/Godot_v${release}_export_templates.tpz"
+          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          unzip -q "Godot_v${release}_export_templates.tpz" -d export-templates
+          cp -R export-templates/templates/. \
+            "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+
+      - name: Import and parse project
+        run: ./godot --headless --path . --editor --quit
+
+      - name: Run server tests
+        run: ./godot --headless --path . tests/server_test_runner.tscn
+
+      - name: Export release package
+        run: |
+          set -euo pipefail
+          mkdir -p build/export build/package/tinyblock-server/addons/webrtc_native/lib
+          ./godot --headless --path . --export-release \
+            "Dedicated Server (Linux/X11)" \
+            build/export/tinyblock-server.x86_64
+          test -x build/export/tinyblock-server.x86_64
+          test -s build/export/tinyblock-server.pck
+          install -m 0755 build/export/tinyblock-server.x86_64 \
+            build/package/tinyblock-server/tinyblock-server.x86_64
+          install -m 0644 build/export/tinyblock-server.pck \
+            build/package/tinyblock-server/tinyblock-server.pck
+          install -m 0755 addons/webrtc_native/lib/libwebrtc_native.linux.template_release.x86_64.so \
+            build/package/tinyblock-server/addons/webrtc_native/lib/
+          install -m 0755 deploy/run-server.sh build/package/tinyblock-server/
+          install -m 0644 README.md SELF_HOSTING.md LICENSE THIRD_PARTY_NOTICES.md \
+            build/package/tinyblock-server/
+          tar -C build/package -czf build/tinyblock-server-linux-x86_64.tar.gz tinyblock-server
+          cd build
+          sha256sum tinyblock-server-linux-x86_64.tar.gz \
+            > tinyblock-server-linux-x86_64.tar.gz.sha256
+
+      - name: Upload release-ready artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinyblock-server-linux-x86_64
+          path: |
+            build/tinyblock-server-linux-x86_64.tar.gz
+            build/tinyblock-server-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tinyblock-server-linux-x86_64
+          path: release
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/tinyblock-server-linux-x86_64.tar.gz
+            release/tinyblock-server-linux-x86_64.tar.gz.sha256
+          generate_release_notes: true
