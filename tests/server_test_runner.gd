@@ -1,8 +1,8 @@
 extends Node
 
-const WorldSim = preload("res://scripts/world.gd")
-const WorldStoreClass = preload("res://scripts/world_store.gd")
-const MultiplayerClientClass = preload("res://scripts/multiplayer_client.gd")
+const WorldSim = preload("res://gameplay/scripts/world.gd")
+const WorldStoreClass = preload("res://gameplay/scripts/world_store.gd")
+const MultiplayerClientClass = preload("res://gameplay/scripts/multiplayer_client.gd")
 
 var failures := 0
 var test_dir := "user://tinyblock-server-tests"

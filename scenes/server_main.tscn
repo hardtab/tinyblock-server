@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://server_main_scene"]
 
 [ext_resource type="Script" path="res://scripts/server_main.gd" id="1_main"]
-[ext_resource type="Script" path="res://scripts/game_view.gd" id="2_game"]
+[ext_resource type="Script" path="res://gameplay/scripts/game_view.gd" id="2_game"]
 
 [node name="ServerMain" type="Control"]
 layout_mode = 3

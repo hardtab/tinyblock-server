@@ -1,0 +1,3 @@
+[submodule "gameplay"]
+	path = gameplay
+	url = https://github.com/hardtab/tinyblock-gameplay.git

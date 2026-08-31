@@ -3,9 +3,9 @@ extends Control
 # Runs headless: reuses the authoritative WorldSim simulation and the complete
 # multiplayer host message handling from the official client, without GUI.
 
-const WorldSim = preload("res://scripts/world.gd")
-const WorldStoreClass = preload("res://scripts/world_store.gd")
-const EmojiReactionsClass = preload("res://scripts/emoji_reactions.gd")
+const WorldSim = preload("res://gameplay/scripts/world.gd")
+const WorldStoreClass = preload("res://gameplay/scripts/world_store.gd")
+const EmojiReactionsClass = preload("res://gameplay/scripts/emoji_reactions.gd")
 const HEADLESS_SERVER_ARG := "--tinyblock-server"
 const HEADLESS_WORLD_ARG := "--world"
 const HEADLESS_MODE_ARG := "--world-mode"

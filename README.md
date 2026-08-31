@@ -22,7 +22,12 @@
   </strong>
 </p>
 
-This repository contains the curated open-source dedicated server source code. It reuses the authoritative world simulation, multiplayer host, persistence, and backend signalling from the official Tiny Block client without including private store, analytics, advertising, or platform-specific code.
+This repository contains the open-source dedicated server shell. Its world
+simulation, multiplayer protocol, persistence, and shared presentation code
+come from the pinned
+[`tinyblock-gameplay`](https://github.com/hardtab/tinyblock-gameplay) submodule,
+which is also used by the official Tiny Block client. Store, advertising,
+analytics, and other platform integrations remain outside the shared runtime.
 
 ## Quick start
 
@@ -34,6 +39,8 @@ This repository contains the curated open-source dedicated server source code. I
 ### Build
 
 ```bash
+git submodule update --init --recursive
+
 # Export the server binary
 godot --headless --export-debug "Dedicated Server (Linux/X11)" build/tinyblock-server.x86_64
 ```
@@ -117,24 +124,14 @@ tinyblock-server/
 ├── export_presets.cfg        # Linux dedicated server export
 ├── scenes/
 │   └── server_main.tscn      # Server entry scene
+├── gameplay/                 # Pinned shared runtime (Git submodule)
+│   ├── scripts/              # Simulation, protocol, rendering, persistence
+│   └── assets/               # Shared SFX and emoji artwork
 ├── scripts/
 │   ├── server_main.gd        # Headless server entry point
-│   ├── game_view.gd          # Authoritative simulation runner
-│   ├── world.gd              # Authoritative world simulation
-│   ├── world_store.gd        # World persistence
-│   ├── block_defs.gd         # Block definitions
-│   ├── biome_defs.gd         # Biome definitions
-│   ├── backend_client.gd     # HTTP API client
-│   ├── multiplayer_client.gd # WebSocket + WebRTC multiplayer
-│   ├── art_assets.gd         # Block art definitions
-│   ├── sfx.gd                # Simulation-compatible sound hooks
-│   ├── emoji_reactions.gd    # Emoji validation
-│   ├── player_profile.gd     # Player profile handling
-│   ├── compact_number.gd     # Number formatting utility
 │   └── analytics.gd          # Stub (no analytics)
-├── assets/                   # Simulation audio and emoji assets
 ├── addons/
-│   └── webrtc_native/        # WebRTC native plugin
+│   └── webrtc_native/        # Linux-specific WebRTC native plugin
 ├── tests/                    # Server and multiplayer tests
 ├── deploy/
 │   ├── run-server.sh         # Example launch script

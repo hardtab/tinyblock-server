@@ -14,12 +14,12 @@ config/features=PackedStringArray("4.7", "GL Compatibility", "dedicated_server")
 
 [autoload]
 
-ArtAssets="*res://scripts/art_assets.gd"
-BlockDefs="*res://scripts/block_defs.gd"
-Sfx="*res://scripts/sfx.gd"
-BackendClient="*res://scripts/backend_client.gd"
-MultiplayerClient="*res://scripts/multiplayer_client.gd"
-PlayerProfile="*res://scripts/player_profile.gd"
+ArtAssets="*res://gameplay/scripts/art_assets.gd"
+BlockDefs="*res://gameplay/scripts/block_defs.gd"
+Sfx="*res://gameplay/scripts/sfx.gd"
+BackendClient="*res://gameplay/scripts/backend_client.gd"
+MultiplayerClient="*res://gameplay/scripts/multiplayer_client.gd"
+PlayerProfile="*res://gameplay/scripts/player_profile.gd"
 Analytics="*res://scripts/analytics.gd"
 
 [display]
