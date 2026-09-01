@@ -9,6 +9,7 @@ var test_dir := "user://tinyblock-server-tests"
 
 
 func _ready() -> void:
+	_test_headless_input_contract()
 	_test_all_modes_roundtrip()
 	_test_persistent_store()
 	_test_dedicated_roster_contract()
@@ -16,6 +17,11 @@ func _ready() -> void:
 	if failures == 0:
 		print("PASS: all five modes boot and round-trip, persistence reloads, dedicated host stays hidden")
 	get_tree().quit(failures)
+
+
+func _test_headless_input_contract() -> void:
+	for action: String in ["move_left", "move_right", "jump"]:
+		_assert(InputMap.has_action(action), "headless project defines %s input action" % action)
 
 
 func _test_all_modes_roundtrip() -> void:
