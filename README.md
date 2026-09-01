@@ -70,7 +70,7 @@ The server:
 | `--world <id>` | `world_community_1` | Stable world save identifier. Prefix with `world_` automatically if omitted. |
 | `--world-name <name>` | `Tiny Block Community` | Public display name in the server browser. |
 | `--world-mode <mode>` | `skyblock` | One of: `skyblock`, `floating_islands`, `procedural` (Random World), `one_block`, `challenge_run`. |
-| `--max-players <1-16>` | `16` | Capacity advertised by this dedicated server. The backend validates and returns this value to clients. |
+| `--max-players <positive integer>` | `16` | Capacity advertised by this dedicated server. The backend validates and returns this server-defined value to clients. |
 
 ## Supported world modes
 

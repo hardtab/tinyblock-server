@@ -102,8 +102,8 @@ func _start_headless_server() -> void:
 	_headless_world_mode = _headless_argument(HEADLESS_MODE_ARG, WorldSim.WORLD_MODE_SKYBLOCK)
 	_headless_world_name = _headless_argument(HEADLESS_NAME_ARG, "Tiny Block Community")
 	_headless_max_players = int(_headless_argument(HEADLESS_MAX_PLAYERS_ARG, "16"))
-	if _headless_max_players < 1 or _headless_max_players > 16:
-		push_error("Headless server --max-players must be between 1 and 16")
+	if _headless_max_players < 1:
+		push_error("Headless server --max-players must be a positive integer")
 		get_tree().quit(2)
 		return
 	if _headless_world_mode not in [

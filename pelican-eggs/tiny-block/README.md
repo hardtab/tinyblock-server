@@ -16,7 +16,6 @@ Tiny Block Server initiates outbound HTTPS, WebSocket, STUN, and WebRTC connecti
 | `WORLD_ID` | `world_community_1` | Stable save identifier. |
 | `WORLD_NAME` | `Tiny Block Community` | Public name displayed in the server browser. |
 | `WORLD_MODE` | `skyblock` | `skyblock`, `floating_islands`, `procedural`, `one_block`, or `challenge_run`. |
-| `MAX_PLAYERS` | `16` | Server-declared capacity from 1 through 16. |
+| `MAX_PLAYERS` | `16` | Server-declared positive-integer capacity. |
 
 World saves persist under `/home/container/.local/share/godot/app_userdata/Tiny Block Server/`.
-

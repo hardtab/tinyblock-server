@@ -62,6 +62,8 @@ func _test_dedicated_roster_contract() -> void:
 		"players": [{"player_id": "headless-host", "role": "host"}],
 	})
 	_assert(client.max_players() == 7, "dedicated capacity comes from the server session")
+	client.set_session_max_players(1000)
+	_assert(client.max_players() == 1000, "dedicated capacity is not capped by the client runtime")
 	_assert(client.player_count() == 0, "headless host is excluded from player count")
 	_assert(client.is_community(), "third-party dedicated session is community")
 	client.free()

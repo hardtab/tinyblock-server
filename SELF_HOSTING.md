@@ -110,7 +110,7 @@ Your world saves remain intact in the data directory.
 | `--world` | string | `world_community_1` | Save file identifier. Prepended with `world_` if missing. |
 | `--world-name` | string | `Tiny Block Community` | Public name in the server browser (max 64 chars). |
 | `--world-mode` | string | `skyblock` | See supported modes below. |
-| `--max-players` | integer | `16` | Server-declared capacity from 1 through 16. P2P worlds are unaffected and stay capped at 4. |
+| `--max-players` | positive integer | `16` | Server-declared capacity. P2P worlds are unaffected and stay capped at 4. |
 
 ### Supported world modes
 

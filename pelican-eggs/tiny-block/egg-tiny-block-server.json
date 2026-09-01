@@ -80,10 +80,9 @@
       "default_value": "16",
       "user_viewable": true,
       "user_editable": true,
-      "rules": "required|integer|between:1,16",
+      "rules": "required|integer|min:1",
       "sort": 5,
       "field_type": "text"
     }
   ]
 }
-
