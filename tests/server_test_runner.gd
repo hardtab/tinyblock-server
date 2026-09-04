@@ -95,6 +95,14 @@ func _test_silent_peer_recovery_contract() -> void:
 		== MultiplayerClientClass.RTC_SILENCE_RECOVERY_DROP_PEER,
 		"a host drops a silent peer so authoritative state switches to the relay",
 	)
+	_assert(
+		not MultiplayerClientClass.rtc_packet_refreshes_watchdog(false, "command", "player_input"),
+		"guest commands do not hide a broken host-to-guest RTC path",
+	)
+	_assert(
+		MultiplayerClientClass.rtc_packet_refreshes_watchdog(false, "control", "p2p_pong"),
+		"a pong proves the host RTC path works in both directions",
+	)
 
 
 func _test_authoritative_inventory_reconciliation() -> void:
