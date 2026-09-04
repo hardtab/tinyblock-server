@@ -14,6 +14,7 @@ func _ready() -> void:
 	_test_all_modes_roundtrip()
 	_test_persistent_store()
 	_test_dedicated_roster_contract()
+	_test_silent_peer_recovery_contract()
 	_test_authoritative_inventory_reconciliation()
 	_test_dedicated_weather_targets_real_players()
 	_cleanup()
@@ -76,6 +77,24 @@ func _test_dedicated_roster_contract() -> void:
 	_assert(client.player_count() == 0, "headless host is excluded from player count")
 	_assert(client.is_community(), "third-party dedicated session is community")
 	client.free()
+
+
+func _test_silent_peer_recovery_contract() -> void:
+	_assert(
+		MultiplayerClientClass.rtc_silence_recovery_mode(true, true)
+		== MultiplayerClientClass.RTC_SILENCE_RECOVERY_WEBSOCKET,
+		"a silent dedicated guest falls back to WebSocket instead of freezing",
+	)
+	_assert(
+		MultiplayerClientClass.rtc_silence_recovery_mode(true, false)
+		== MultiplayerClientClass.RTC_SILENCE_RECOVERY_RECONNECT,
+		"a silent P2P guest reconnects when relay fallback is unavailable",
+	)
+	_assert(
+		MultiplayerClientClass.rtc_silence_recovery_mode(false, true)
+		== MultiplayerClientClass.RTC_SILENCE_RECOVERY_DROP_PEER,
+		"a host drops a silent peer so authoritative state switches to the relay",
+	)
 
 
 func _test_authoritative_inventory_reconciliation() -> void:
