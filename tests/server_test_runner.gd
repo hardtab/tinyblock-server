@@ -3,6 +3,7 @@ extends Node
 const WorldSim = preload("res://gameplay/scripts/world.gd")
 const WorldStoreClass = preload("res://gameplay/scripts/world_store.gd")
 const MultiplayerClientClass = preload("res://gameplay/scripts/multiplayer_client.gd")
+const ServerMainClass = preload("res://scripts/server_main.gd")
 
 var failures := 0
 var test_dir := "user://tinyblock-server-tests"
@@ -13,6 +14,8 @@ func _ready() -> void:
 	_test_all_modes_roundtrip()
 	_test_persistent_store()
 	_test_dedicated_roster_contract()
+	_test_authoritative_inventory_reconciliation()
+	_test_dedicated_weather_targets_real_players()
 	_cleanup()
 	if failures == 0:
 		print("PASS: all five modes boot and round-trip, persistence reloads, dedicated host stays hidden")
@@ -73,6 +76,43 @@ func _test_dedicated_roster_contract() -> void:
 	_assert(client.player_count() == 0, "headless host is excluded from player count")
 	_assert(client.is_community(), "third-party dedicated session is community")
 	client.free()
+
+
+func _test_authoritative_inventory_reconciliation() -> void:
+	var authoritative := {
+		"inventory_host_revision": 4,
+		"inventory_client_revision": 1,
+		"inventory": {"stone": 3},
+	}
+	var stale_guest_snapshot := {
+		"inventory_host_revision": 3,
+		"inventory_client_revision": 2,
+		"inventory": {},
+	}
+	var reconciled: Dictionary = ServerMainClass.reconcile_stale_inventory_ack(authoritative, stale_guest_snapshot)
+	_assert(int(reconciled.get("inventory_client_revision", 0)) == 2, "stale guest mutations cannot make it reject the latest mining award")
+	_assert(int((reconciled.get("inventory", {}) as Dictionary).get("stone", 0)) == 3, "stale guest snapshots cannot erase authoritative mining drops")
+
+
+func _test_dedicated_weather_targets_real_players() -> void:
+	var sim := WorldSim.new()
+	sim.create_island()
+	sim.weather_uses_local_player = false
+	sim.weather_type = "rain"
+	sim.weather_ticks_remaining = 10
+	sim.tick_weather()
+	_assert(sim.weather_type == "clear", "empty dedicated worlds clear weather instead of raining on the hidden host")
+	var remote_tile := Vector2i(120, 10)
+	sim.set_block(remote_tile.x, remote_tile.y + 1, BlockDefs.BLOCKS.stone.id)
+	sim.multiplayer_player_targets["guest"] = {
+		"x": float(remote_tile.x * BlockDefs.TILE),
+		"y": float(remote_tile.y * BlockDefs.TILE),
+		"w": 20.0,
+		"h": 28.0,
+		"health": WorldSim.MAX_PLAYER_HEALTH,
+	}
+	var target = sim._find_rain_target()
+	_assert(target is Vector2i and Vector2((target as Vector2i) - remote_tile).length() <= float(WorldSim.WEATHER_TARGET_RADIUS), "dedicated weather follows a connected real player")
 
 
 func _generate(sim: RefCounted, mode: String) -> void:

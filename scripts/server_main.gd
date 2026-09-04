@@ -27,6 +27,8 @@ const CONTENT_REFRESH_INTERVAL := 60.0
 const MULTIPLAYER_SNAPSHOT_INTERVAL := 0.1
 const MULTIPLAYER_CREATURE_SNAPSHOT_INTERVAL := 0.2
 const MULTIPLAYER_WORLD_CHUNK_INTERVAL := 0.075
+const INVENTORY_RESEND_INTERVAL := 0.4
+const INVENTORY_RESEND_ATTEMPTS := 5
 const MULTIPLAYER_SKIN_KEYS := ["skin", "shirt", "shirt_dark", "accent", "pants", "hair"]
 
 @onready var game_view: Node2D = $SubViewportContainer/SubViewport/GameView
@@ -49,6 +51,7 @@ var _snapshot_send_queue: Array[Dictionary] = []
 var _snapshot_send_time_left := 0.0
 var _pending_tile_deltas: Dictionary = {}
 var _pending_plant_deltas: Dictionary = {}
+var _pending_inventory_resends: Dictionary = {}
 var _pvp_cooldowns: Dictionary = {}
 var _remote_respawn_protected_until_msec: Dictionary = {}
 var _catalog_sync_time_left := 0.0
@@ -121,6 +124,10 @@ func _start_headless_server() -> void:
 	game_view.sim.plant_changed.connect(_on_multiplayer_plant_changed)
 	game_view.sim.remote_player_attacked_by_creature.connect(_on_remote_player_attacked_by_creature)
 	game_view.sim.player_defeated.connect(_headless_respawn_player)
+	# A dedicated process has no real local avatar. Weather must follow connected
+	# guests and stop while the world is empty instead of repeatedly targeting the
+	# hidden host placeholder at the saved spawn.
+	game_view.sim.weather_uses_local_player = false
 	MultiplayerClient.message_received.connect(_on_multiplayer_message)
 	MultiplayerClient.connected.connect(_on_headless_connected)
 	MultiplayerClient.disconnected.connect(_on_headless_disconnected)
@@ -219,6 +226,7 @@ func _process(delta: float) -> void:
 	elif not MultiplayerClient.is_online():
 		_headless_rehost_time_left = HEADLESS_RETRY_SECONDS
 	_tick_snapshot_send_queue(delta)
+	_tick_inventory_resends(delta)
 	_tick_multiplayer(delta)
 	_autosave_timer += delta
 	if _should_autosave():
@@ -265,6 +273,7 @@ func _on_multiplayer_message(message: Dictionary) -> void:
 			_mark_world_dirty()
 		_remote_players.erase(left_player_id)
 		_remote_respawn_protected_until_msec.erase(left_player_id)
+		_pending_inventory_resends.erase(left_player_id)
 		game_view.remote_players = _remote_players
 
 
@@ -690,7 +699,7 @@ func _create_remote_player_death_cache(player_id: String) -> Dictionary:
 	_apply_inventory_state(host_inventory_state)
 	game_view.sim.selected = original_selected
 	_applying_multiplayer_state = false
-	MultiplayerClient.send_state("player_inventory", captured_guest_state, player_id)
+	_queue_authoritative_inventory(player_id, captured_guest_state)
 	return result
 
 
@@ -781,7 +790,7 @@ func _apply_remote_world_action(player_id: String, action: String, payload: Dict
 	_apply_inventory_state(host_inventory_state)
 	game_view.sim.selected = original_selected
 	_applying_multiplayer_state = false
-	MultiplayerClient.send_state("player_inventory", updated_guest_state, player_id)
+	_queue_authoritative_inventory(player_id, updated_guest_state)
 	if action in ["mine_block", "place_block", "recover_death_cache", "recover_one_use_cache"] and game_view.sim.in_bounds(action_tx, action_ty):
 		var result_pos := Vector2i(action_tx, action_ty)
 		var action_result := {
@@ -846,12 +855,18 @@ func _store_remote_inventory(player_id: String, payload: Dictionary) -> void:
 	var authoritative_revision := maxi(0, int(existing.get("inventory_host_revision", 0)))
 	var incoming_revision := maxi(0, int(payload.get("inventory_host_revision", 0)))
 	if incoming_revision != authoritative_revision:
-		MultiplayerClient.send_state("player_inventory", existing, player_id)
+		# The guest may have made a local inventory transaction while a host-side
+		# mining award was crossing the wire. Do not accept its stale full snapshot
+		# (that would erase the award), but advance the echoed client revision so the
+		# guest does not reject the authoritative inventory forever.
+		existing = reconcile_stale_inventory_ack(existing, payload)
+		game_view.sim.multiplayer_player_states[player_id] = existing
+		_queue_authoritative_inventory(player_id, existing)
 		return
 	var authoritative_client_revision := maxi(0, int(existing.get("inventory_client_revision", 0)))
 	var incoming_client_revision := maxi(0, int(payload.get("inventory_client_revision", 0)))
 	if payload.has("inventory_client_revision") and incoming_client_revision < authoritative_client_revision:
-		MultiplayerClient.send_state("player_inventory", existing, player_id)
+		_queue_authoritative_inventory(player_id, existing)
 		return
 	var state := _sanitize_inventory_state(payload)
 	state["inventory_host_revision"] = authoritative_revision
@@ -860,8 +875,54 @@ func _store_remote_inventory(player_id: String, payload: Dictionary) -> void:
 		if existing.has(key):
 			state[key] = existing[key].duplicate(true) if existing[key] is Dictionary else existing[key]
 	game_view.sim.multiplayer_player_states[player_id] = state
-	MultiplayerClient.send_state("player_inventory", state, player_id)
+	_queue_authoritative_inventory(player_id, state)
 	_mark_world_dirty()
+
+
+static func reconcile_stale_inventory_ack(existing: Dictionary, incoming: Dictionary) -> Dictionary:
+	var reconciled := existing.duplicate(true)
+	if incoming.has("inventory_client_revision"):
+		reconciled["inventory_client_revision"] = maxi(
+			maxi(0, int(reconciled.get("inventory_client_revision", 0))),
+			maxi(0, int(incoming.get("inventory_client_revision", 0))),
+		)
+	return reconciled
+
+
+func _queue_authoritative_inventory(player_id: String, state: Dictionary) -> void:
+	if player_id.is_empty():
+		return
+	var payload := state.duplicate(true)
+	MultiplayerClient.send_state("player_inventory", payload, player_id)
+	_pending_inventory_resends[player_id] = {
+		"payload": payload,
+		"attempts_left": INVENTORY_RESEND_ATTEMPTS,
+		"time_left": INVENTORY_RESEND_INTERVAL,
+	}
+
+
+func _tick_inventory_resends(delta: float) -> void:
+	if _pending_inventory_resends.is_empty() or not MultiplayerClient.is_host():
+		return
+	for raw_player_id in _pending_inventory_resends.keys():
+		var player_id := str(raw_player_id)
+		if not _remote_players.has(player_id):
+			_pending_inventory_resends.erase(player_id)
+			continue
+		var pending := _pending_inventory_resends[player_id] as Dictionary
+		pending["time_left"] = float(pending.get("time_left", 0.0)) - delta
+		if float(pending["time_left"]) > 0.0:
+			_pending_inventory_resends[player_id] = pending
+			continue
+		var payload: Dictionary = pending.get("payload", {}) if pending.get("payload", {}) is Dictionary else {}
+		MultiplayerClient.send_state("player_inventory", payload, player_id)
+		var attempts_left := int(pending.get("attempts_left", 0)) - 1
+		if attempts_left <= 0:
+			_pending_inventory_resends.erase(player_id)
+		else:
+			pending["attempts_left"] = attempts_left
+			pending["time_left"] = INVENTORY_RESEND_INTERVAL
+			_pending_inventory_resends[player_id] = pending
 
 
 func _capture_inventory_state() -> Dictionary:
