@@ -29,6 +29,7 @@ const MULTIPLAYER_CREATURE_SNAPSHOT_INTERVAL := 0.2
 const MULTIPLAYER_WORLD_CHUNK_INTERVAL := 0.075
 const INVENTORY_RESEND_INTERVAL := 0.4
 const INVENTORY_RESEND_ATTEMPTS := 5
+const REMOTE_PLAYER_STALE_TIMEOUT_MSEC := 30_000
 const MULTIPLAYER_SKIN_KEYS := ["skin", "shirt", "shirt_dark", "accent", "pants", "hair"]
 
 @onready var game_view: Node2D = $SubViewportContainer/SubViewport/GameView
@@ -284,6 +285,7 @@ func _on_multiplayer_message(message: Dictionary) -> void:
 func _tick_multiplayer(delta: float) -> void:
 	if not MultiplayerClient.is_host() or not _world_started:
 		return
+	_prune_stale_remote_players(Time.get_ticks_msec())
 	_multiplayer_position_time_left -= delta
 	_multiplayer_creature_time_left -= delta
 	if _multiplayer_position_time_left <= 0.0:
@@ -495,6 +497,32 @@ func _send_requested_chunk(target_player_id: String, chunk_x: int) -> void:
 # ---------------------------------------------------------------------------
 # Remote player state
 # ---------------------------------------------------------------------------
+
+func _prune_stale_remote_players(now_msec: int) -> void:
+	var stale_ids := stale_remote_player_ids(_remote_players, now_msec)
+	if stale_ids.is_empty():
+		return
+	for player_id: String in stale_ids:
+		var remote: Dictionary = _remote_players.get(player_id, {})
+		if not remote.is_empty():
+			_store_remote_player_resume_state(player_id, remote)
+		_remote_players.erase(player_id)
+		_remote_respawn_protected_until_msec.erase(player_id)
+		_pending_inventory_resends.erase(player_id)
+	game_view.remote_players = _remote_players
+
+
+static func stale_remote_player_ids(remote_players: Dictionary, now_msec: int, timeout_msec: int = REMOTE_PLAYER_STALE_TIMEOUT_MSEC) -> Array[String]:
+	var stale_ids: Array[String] = []
+	for raw_player_id in remote_players:
+		if not remote_players[raw_player_id] is Dictionary:
+			stale_ids.append(str(raw_player_id))
+			continue
+		var received_msec := int((remote_players[raw_player_id] as Dictionary).get("_received_msec", 0))
+		if received_msec <= 0 or now_msec - received_msec >= timeout_msec:
+			stale_ids.append(str(raw_player_id))
+	stale_ids.sort()
+	return stale_ids
 
 func _accept_remote_player_snapshot(player_id: String, raw_payload: Variant) -> void:
 	if player_id.is_empty() or not raw_payload is Dictionary:

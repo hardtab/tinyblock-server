@@ -14,6 +14,7 @@ func _ready() -> void:
 	_test_all_modes_roundtrip()
 	_test_persistent_store()
 	_test_dedicated_roster_contract()
+	_test_stale_remote_players_are_pruned()
 	_test_silent_peer_recovery_contract()
 	_test_authoritative_inventory_reconciliation()
 	_test_dedicated_weather_targets_real_players()
@@ -77,6 +78,17 @@ func _test_dedicated_roster_contract() -> void:
 	_assert(client.player_count() == 0, "headless host is excluded from player count")
 	_assert(client.is_community(), "third-party dedicated session is community")
 	client.free()
+
+
+func _test_stale_remote_players_are_pruned() -> void:
+	var now_msec := 100_000
+	var remote_players := {
+		"active-player": {"_received_msec": now_msec - 100},
+		"stale-player": {"_received_msec": now_msec - 30_000},
+		"legacy-placeholder": {},
+	}
+	var stale_ids := ServerMainClass.stale_remote_player_ids(remote_players, now_msec)
+	_assert(stale_ids == ["legacy-placeholder", "stale-player"], "disconnected player snapshots cannot remain as motionless host avatars")
 
 
 func _test_silent_peer_recovery_contract() -> void:
