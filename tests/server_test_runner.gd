@@ -160,6 +160,13 @@ func _test_fake_player_flag_contract() -> void:
 	_assert(ServerMainClass.normalized_fake_player_count(10) == 10, "the filming setup accepts ten fake players")
 	_assert(ServerMainClass.normalized_fake_player_count(99) == 10, "the filming setup cannot exceed ten fake players")
 	_assert(ServerMainClass.normalized_fake_player_count(-1) == 0, "negative fake-player values stay disabled")
+	_assert(ServerMainClass.fake_player_jump_height() > 90.0, "filming bots use the full standard player jump height")
+	_assert(not ServerMainClass.natural_spawning_enabled_for_remote_players({}), "an empty dedicated world cannot accumulate natural creatures")
+	_assert(ServerMainClass.natural_spawning_enabled_for_remote_players({"guest": {}}), "one real player enables natural creature spawning")
+	var crowded_players := {}
+	for index in 10:
+		crowded_players["guest_%d" % index] = {}
+	_assert(ServerMainClass.natural_spawning_enabled_for_remote_players(crowded_players), "ten nearby players do not multiply the natural spawn gate")
 
 
 func _generate(sim: RefCounted, mode: String) -> void:

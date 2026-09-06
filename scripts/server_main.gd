@@ -227,6 +227,7 @@ func _headless_respawn_player() -> void:
 func _process(delta: float) -> void:
 	if not _world_started:
 		return
+	game_view.sim.natural_creature_spawning_enabled = natural_spawning_enabled_for_remote_players(_remote_players)
 	if _headless_rehost_time_left >= 0.0:
 		_headless_rehost_time_left -= delta
 		if _headless_rehost_time_left <= 0.0:
@@ -352,6 +353,14 @@ static func normalized_fake_player_count(requested_count: int) -> int:
 	return clampi(requested_count, 0, HEADLESS_FAKE_PLAYERS_MAX)
 
 
+static func natural_spawning_enabled_for_remote_players(remote_players: Dictionary) -> bool:
+	return not remote_players.is_empty()
+
+
+static func fake_player_jump_height() -> float:
+	return pow(absf(BlockDefs.JUMP), 2.0) / (2.0 * BlockDefs.GRAVITY)
+
+
 func _fake_players_snapshot() -> Dictionary:
 	if _headless_fake_player_count <= 0:
 		return {}
@@ -361,11 +370,12 @@ func _fake_players_snapshot() -> Dictionary:
 	var base_x := float(spawn.x * BlockDefs.TILE) + 2.0
 	var base_y := float(spawn.y * BlockDefs.TILE) - 28.0
 	var columns := 5
+	var jump_height := fake_player_jump_height()
 	for index in _headless_fake_player_count:
 		var row := index / columns
 		var column := index % columns
 		var phase := now * (2.4 + float(index) * 0.11) + float(index) * 0.73
-		var hop := maxf(0.0, sin(phase)) * 24.0
+		var hop := maxf(0.0, sin(phase)) * jump_height
 		var shuffle := sin(now * (0.9 + float(index) * 0.07) + float(index)) * 8.0
 		var shirt := Color.from_hsv(fposmod(float(index) * 0.137, 1.0), 0.62, 0.92)
 		bots["filming_bot_%02d" % (index + 1)] = {
