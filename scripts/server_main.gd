@@ -11,6 +11,8 @@ const HEADLESS_WORLD_ARG := "--world"
 const HEADLESS_MODE_ARG := "--world-mode"
 const HEADLESS_NAME_ARG := "--world-name"
 const HEADLESS_MAX_PLAYERS_ARG := "--max-players"
+const HEADLESS_FAKE_PLAYERS_ARG := "--fake-players"
+const HEADLESS_FAKE_PLAYERS_MAX := 10
 const HEADLESS_RETRY_SECONDS := 5.0
 const HEADLESS_MAX_FPS := 30
 const AUTOSAVE_MIN_INTERVAL := 5.0
@@ -46,6 +48,7 @@ var _headless_world_id := ""
 var _headless_world_mode := WorldSim.WORLD_MODE_SKYBLOCK
 var _headless_world_name := "Tiny Block Community"
 var _headless_max_players := 16
+var _headless_fake_player_count := 0
 var _remote_players: Dictionary = {}
 var _snapshot_outgoing_transfers: Dictionary = {}
 var _snapshot_send_queue: Array[Dictionary] = []
@@ -106,6 +109,9 @@ func _start_headless_server() -> void:
 	_headless_world_mode = _headless_argument(HEADLESS_MODE_ARG, WorldSim.WORLD_MODE_SKYBLOCK)
 	_headless_world_name = _headless_argument(HEADLESS_NAME_ARG, "Tiny Block Community")
 	_headless_max_players = int(_headless_argument(HEADLESS_MAX_PLAYERS_ARG, "16"))
+	_headless_fake_player_count = normalized_fake_player_count(
+		int(_headless_argument(HEADLESS_FAKE_PLAYERS_ARG, "0"))
+	)
 	if _headless_max_players < 1:
 		push_error("Headless server --max-players must be a positive integer")
 		get_tree().quit(2)
@@ -158,6 +164,8 @@ func _boot_headless_world() -> void:
 	_save_world()
 	_headless_rehost_time_left = 0.0
 	print("Tiny Block headless server starting world %s (%s)" % [_headless_world_id, game_view.sim.world_mode])
+	if _headless_fake_player_count > 0:
+		print("Tiny Block filming bots enabled: %d fake players" % _headless_fake_player_count)
 
 
 func _headless_connect_host() -> void:
@@ -291,6 +299,9 @@ func _tick_multiplayer(delta: float) -> void:
 	if _multiplayer_position_time_left <= 0.0:
 		_multiplayer_position_time_left = MULTIPLAYER_SNAPSHOT_INTERVAL
 		var players := _remote_players.duplicate(true)
+		var fake_players := _fake_players_snapshot()
+		for raw_fake_player_id in fake_players:
+			players[str(raw_fake_player_id)] = fake_players[raw_fake_player_id]
 		if not MultiplayerClient.is_dedicated_server_session():
 			var local: Dictionary = game_view.sim.player
 			players[MultiplayerClient.player_id] = {
@@ -335,6 +346,49 @@ func _tick_multiplayer(delta: float) -> void:
 				int(creature.get("carried_materials", 0)),
 			])
 		MultiplayerClient.send_state("creatures_snapshot", {"creatures": snapshot})
+
+
+static func normalized_fake_player_count(requested_count: int) -> int:
+	return clampi(requested_count, 0, HEADLESS_FAKE_PLAYERS_MAX)
+
+
+func _fake_players_snapshot() -> Dictionary:
+	if _headless_fake_player_count <= 0:
+		return {}
+	var bots := {}
+	var now := float(Time.get_ticks_msec()) / 1000.0
+	var spawn: Vector2i = game_view.sim.default_spawn
+	var base_x := float(spawn.x * BlockDefs.TILE) + 2.0
+	var base_y := float(spawn.y * BlockDefs.TILE) - 28.0
+	var columns := 5
+	for index in _headless_fake_player_count:
+		var row := index / columns
+		var column := index % columns
+		var phase := now * (2.4 + float(index) * 0.11) + float(index) * 0.73
+		var hop := maxf(0.0, sin(phase)) * 24.0
+		var shuffle := sin(now * (0.9 + float(index) * 0.07) + float(index)) * 8.0
+		var shirt := Color.from_hsv(fposmod(float(index) * 0.137, 1.0), 0.62, 0.92)
+		bots["filming_bot_%02d" % (index + 1)] = {
+			"x": base_x + (float(column) - 2.0) * 36.0 + shuffle,
+			"y": base_y - float(row) * 3.0 - hop,
+			"facing": -1 if sin(phase * 0.7) < 0.0 else 1,
+			"vx": 0.0,
+			"vy": 0.0,
+			"on_ground": hop <= 0.01,
+			"health": WorldSim.MAX_PLAYER_HEALTH,
+			"nourishment": WorldSim.MAX_NOURISHMENT,
+			"respawn_revision": 0,
+			"skin": {
+				"skin": Color("#f1b887").to_html(false),
+				"shirt": shirt.to_html(false),
+				"shirt_dark": shirt.darkened(0.32).to_html(false),
+				"accent": shirt.lightened(0.26).to_html(false),
+				"pants": Color("#31465f").to_html(false),
+				"hair": Color("#3c2415").to_html(false),
+			},
+			"equipment_slots": {"hand": "", "feet": ""},
+		}
+	return bots
 
 
 func _local_equipment_snapshot() -> Dictionary:

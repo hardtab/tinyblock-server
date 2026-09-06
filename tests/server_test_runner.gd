@@ -18,6 +18,7 @@ func _ready() -> void:
 	_test_silent_peer_recovery_contract()
 	_test_authoritative_inventory_reconciliation()
 	_test_dedicated_weather_targets_real_players()
+	_test_fake_player_flag_contract()
 	_cleanup()
 	if failures == 0:
 		print("PASS: all five modes boot and round-trip, persistence reloads, dedicated host stays hidden")
@@ -152,6 +153,13 @@ func _test_dedicated_weather_targets_real_players() -> void:
 	}
 	var target = sim._find_rain_target()
 	_assert(target is Vector2i and Vector2((target as Vector2i) - remote_tile).length() <= float(WorldSim.WEATHER_TARGET_RADIUS), "dedicated weather follows a connected real player")
+
+
+func _test_fake_player_flag_contract() -> void:
+	_assert(ServerMainClass.normalized_fake_player_count(0) == 0, "filming bots are disabled by default")
+	_assert(ServerMainClass.normalized_fake_player_count(10) == 10, "the filming setup accepts ten fake players")
+	_assert(ServerMainClass.normalized_fake_player_count(99) == 10, "the filming setup cannot exceed ten fake players")
+	_assert(ServerMainClass.normalized_fake_player_count(-1) == 0, "negative fake-player values stay disabled")
 
 
 func _generate(sim: RefCounted, mode: String) -> void:

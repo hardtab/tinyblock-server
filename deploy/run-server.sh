@@ -14,6 +14,7 @@ WORLD_ID="${WORLD_ID:-world_community_1}"
 WORLD_NAME="${WORLD_NAME:-Tiny Block Community}"
 WORLD_MODE="${WORLD_MODE:-skyblock}"
 MAX_PLAYERS="${MAX_PLAYERS:-16}"
+FAKE_PLAYERS="${FAKE_PLAYERS:-0}"
 
 if [ ! -x "$SERVER_BIN" ]; then
     echo "Error: server binary not found at $SERVER_BIN"
@@ -27,4 +28,5 @@ exec "$SERVER_BIN" \
     --world "$WORLD_ID" \
     --world-name "$WORLD_NAME" \
     --world-mode "$WORLD_MODE" \
-    --max-players "$MAX_PLAYERS"
+    --max-players "$MAX_PLAYERS" \
+    --fake-players "$FAKE_PLAYERS"
