@@ -67,6 +67,7 @@ jobs:
             > tinyblock-server-linux-x86_64.tar.gz.sha256
 
       - name: Upload release-ready artifact
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v6
         with:
           name: tinyblock-server-linux-x86_64
@@ -74,6 +75,7 @@ jobs:
             build/tinyblock-server-linux-x86_64.tar.gz
             build/tinyblock-server-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
+          retention-days: 5
 
   release:
     name: Publish release
