@@ -14,6 +14,9 @@ const HEADLESS_MAX_PLAYERS_ARG := "--max-players"
 const HEADLESS_FAKE_PLAYERS_ARG := "--fake-players"
 const HEADLESS_FAKE_PLAYERS_MAX := 10
 const HEADLESS_RETRY_SECONDS := 5.0
+const HEADLESS_RETRY_MAX_SECONDS := 300.0
+const HEADLESS_RETRY_JITTER_RATIO := 0.2
+const HEADLESS_CONNECT_TIMEOUT_SECONDS := 30.0
 const HEADLESS_MAX_FPS := 30
 const AUTOSAVE_MIN_INTERVAL := 5.0
 const AUTOSAVE_IDLE_DELAY := 2.0
@@ -44,6 +47,11 @@ var _autosave_idle_timer := 0.0
 var _last_saved_player_position := Vector2.ZERO
 var _headless_server := false
 var _headless_rehost_time_left := -1.0
+var _headless_rehost_attempt := 0
+var _headless_rehost_in_flight := false
+var _headless_connection_pending := false
+var _headless_connection_time_left := -1.0
+var _headless_retry_rng := RandomNumberGenerator.new()
 var _headless_world_id := ""
 var _headless_world_mode := WorldSim.WORLD_MODE_SKYBLOCK
 var _headless_world_name := "Tiny Block Community"
@@ -101,6 +109,7 @@ func _headless_argument(name: String, fallback: String = "") -> String:
 
 func _start_headless_server() -> void:
 	_headless_server = true
+	_headless_retry_rng.randomize()
 	Engine.max_fps = HEADLESS_MAX_FPS
 	set_process(true)
 	_headless_world_id = _headless_argument(HEADLESS_WORLD_ARG, "world_community_1")
@@ -169,8 +178,15 @@ func _boot_headless_world() -> void:
 
 
 func _headless_connect_host() -> void:
-	if not _headless_server or not _world_started or MultiplayerClient.is_online():
+	if (
+		not _headless_server
+		or not _world_started
+		or MultiplayerClient.is_online()
+		or _headless_rehost_in_flight
+		or _headless_connection_pending
+	):
 		return
+	_headless_rehost_in_flight = true
 	var response := await BackendClient.create_multiplayer_session(
 		game_view.sim.world_id,
 		_headless_world_name,
@@ -179,9 +195,19 @@ func _headless_connect_host() -> void:
 		true,
 		_headless_max_players,
 	)
+	_headless_rehost_in_flight = false
+	if not _headless_server or not _world_started:
+		return
 	if not response.get("ok", false):
-		push_error("Headless multiplayer session creation failed: %s" % str(response.get("error", "unknown")))
-		_headless_rehost_time_left = HEADLESS_RETRY_SECONDS
+		push_error(
+			"Headless multiplayer session creation failed: error=%s transport_code=%d status_code=%d"
+			% [
+				str(response.get("error", "unknown")),
+				int(response.get("code", -1)),
+				int(response.get("status_code", 0)),
+			]
+		)
+		_schedule_headless_rehost_retry("session_creation_failed")
 		return
 	var body: Dictionary = response.get("body", {})
 	var session_body: Dictionary = body.get("session", {}) if body.get("session", {}) is Dictionary else {}
@@ -200,20 +226,65 @@ func _headless_connect_host() -> void:
 	else:
 		MultiplayerClient.set_session_classification("community")
 	if error != OK:
-		push_error("Headless multiplayer websocket connection failed: %s" % error_string(error))
-		_headless_rehost_time_left = HEADLESS_RETRY_SECONDS
+		push_error(
+			"Headless multiplayer websocket connection failed: transport_code=%d (%s)"
+			% [int(error), error_string(error)]
+		)
+		_schedule_headless_rehost_retry("websocket_connect_failed")
+		return
+	# `connect_with_ticket` closes any previous socket first. If that close
+	# emitted `disconnected`, its retry timer belongs to the old connection and
+	# must not race this fresh transport attempt.
+	_headless_rehost_time_left = -1.0
+	_headless_connection_pending = true
+	_headless_connection_time_left = HEADLESS_CONNECT_TIMEOUT_SECONDS
+
+
+func _schedule_headless_rehost_retry(reason: String) -> void:
+	if not _headless_server or MultiplayerClient.is_online():
+		return
+	_headless_rehost_attempt += 1
+	var jitter_factor := _headless_retry_rng.randf_range(
+		-HEADLESS_RETRY_JITTER_RATIO,
+		HEADLESS_RETRY_JITTER_RATIO,
+	)
+	_headless_rehost_time_left = headless_rehost_retry_delay(_headless_rehost_attempt, jitter_factor)
+	print(
+		"Tiny Block headless server retry scheduled in %.1fs (attempt=%d, reason=%s)"
+		% [_headless_rehost_time_left, _headless_rehost_attempt, reason]
+	)
+
+
+static func headless_rehost_retry_delay(attempt: int, jitter_factor: float = 0.0) -> float:
+	var safe_attempt := maxi(attempt, 1)
+	var base_delay := minf(
+		HEADLESS_RETRY_MAX_SECONDS,
+		HEADLESS_RETRY_SECONDS * pow(2.0, float(safe_attempt - 1)),
+	)
+	var bounded_jitter := clampf(jitter_factor, -HEADLESS_RETRY_JITTER_RATIO, HEADLESS_RETRY_JITTER_RATIO)
+	return clampf(
+		base_delay * (1.0 + bounded_jitter),
+		HEADLESS_RETRY_SECONDS * (1.0 - HEADLESS_RETRY_JITTER_RATIO),
+		HEADLESS_RETRY_MAX_SECONDS,
+	)
 
 
 func _on_headless_connected(_role: String, _player_id: String, _session_id: String) -> void:
 	_headless_rehost_time_left = -1.0
+	_headless_rehost_attempt = 0
+	_headless_rehost_in_flight = false
+	_headless_connection_pending = false
+	_headless_connection_time_left = -1.0
 	print("Tiny Block headless server is online: %s" % MultiplayerClient.session_id)
 
 
 func _on_headless_disconnected(reason: String) -> void:
 	if not _headless_server:
 		return
+	_headless_connection_pending = false
+	_headless_connection_time_left = -1.0
 	print("Tiny Block headless server disconnected: %s" % reason)
-	_headless_rehost_time_left = HEADLESS_RETRY_SECONDS
+	_schedule_headless_rehost_retry("disconnected_%s" % reason)
 
 
 func _headless_respawn_player() -> void:
@@ -233,8 +304,22 @@ func _process(delta: float) -> void:
 		if _headless_rehost_time_left <= 0.0:
 			_headless_rehost_time_left = -1.0
 			_headless_connect_host()
+	elif _headless_rehost_in_flight:
+		pass
+	elif _headless_connection_pending:
+		_headless_connection_time_left -= delta
+		if _headless_connection_time_left <= 0.0:
+			_headless_connection_pending = false
+			_headless_connection_time_left = -1.0
+			push_error(
+				"Headless multiplayer websocket connection timed out: transport_code=%d (%s)"
+				% [int(ERR_TIMEOUT), error_string(ERR_TIMEOUT)]
+			)
+			MultiplayerClient.disconnect_from_session()
+			if _headless_rehost_time_left < 0.0:
+				_schedule_headless_rehost_retry("websocket_connect_timeout")
 	elif not MultiplayerClient.is_online():
-		_headless_rehost_time_left = HEADLESS_RETRY_SECONDS
+		_schedule_headless_rehost_retry("offline")
 	_tick_snapshot_send_queue(delta)
 	_tick_inventory_resends(delta)
 	_tick_multiplayer(delta)

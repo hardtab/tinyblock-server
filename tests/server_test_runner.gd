@@ -19,6 +19,7 @@ func _ready() -> void:
 	_test_authoritative_inventory_reconciliation()
 	_test_dedicated_weather_targets_real_players()
 	_test_fake_player_flag_contract()
+	_test_headless_rehost_backoff_contract()
 	_cleanup()
 	if failures == 0:
 		print("PASS: all five modes boot and round-trip, persistence reloads, dedicated host stays hidden")
@@ -167,6 +168,47 @@ func _test_fake_player_flag_contract() -> void:
 	for index in 10:
 		crowded_players["guest_%d" % index] = {}
 	_assert(ServerMainClass.natural_spawning_enabled_for_remote_players(crowded_players), "ten nearby players do not multiply the natural spawn gate")
+
+
+func _test_headless_rehost_backoff_contract() -> void:
+	var first_delay := ServerMainClass.headless_rehost_retry_delay(1)
+	var second_delay := ServerMainClass.headless_rehost_retry_delay(2)
+	var third_delay := ServerMainClass.headless_rehost_retry_delay(3)
+	_assert(is_equal_approx(first_delay, ServerMainClass.HEADLESS_RETRY_SECONDS), "the first rehost retry keeps the short initial delay")
+	_assert(second_delay > first_delay and third_delay > second_delay, "rehost retries use exponential backoff")
+	_assert(
+		ServerMainClass.headless_rehost_retry_delay(100, 1.0) <= ServerMainClass.HEADLESS_RETRY_MAX_SECONDS,
+		"rehost backoff is capped even with positive jitter",
+	)
+	_assert(
+		ServerMainClass.headless_rehost_retry_delay(2, -1.0)
+		< ServerMainClass.headless_rehost_retry_delay(2, 0.0),
+		"rehost retries apply bounded negative jitter",
+	)
+	var server := ServerMainClass.new()
+	server._headless_server = true
+	server._headless_rehost_attempt = 3
+	server._headless_rehost_time_left = 12.0
+	server._headless_rehost_in_flight = true
+	server._headless_connection_pending = true
+	server._headless_connection_time_left = 9.0
+	server._on_headless_connected("host", "headless-host", "server-test")
+	_assert(server._headless_rehost_attempt == 0, "successful connected resets the retry attempt")
+	_assert(server._headless_rehost_time_left < 0.0, "successful connected cancels the retry timer")
+	_assert(not server._headless_rehost_in_flight, "successful connected clears session creation in-flight state")
+	_assert(not server._headless_connection_pending, "successful connected clears transport pending state")
+	server.free()
+	var guarded_server := ServerMainClass.new()
+	guarded_server._headless_server = true
+	guarded_server._world_started = true
+	guarded_server._headless_rehost_in_flight = true
+	guarded_server._headless_connect_host()
+	_assert(guarded_server._headless_rehost_in_flight, "an in-flight session request cannot start a duplicate request")
+	guarded_server._headless_rehost_in_flight = false
+	guarded_server._headless_connection_pending = true
+	guarded_server._headless_connect_host()
+	_assert(guarded_server._headless_connection_pending, "a pending transport cannot start a duplicate session")
+	guarded_server.free()
 
 
 func _generate(sim: RefCounted, mode: String) -> void:
