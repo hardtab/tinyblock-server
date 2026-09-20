@@ -483,6 +483,10 @@ func _simulate_remote_player_input(player_id: String, move_left: bool, move_righ
 	if not _remote_players.has(player_id):
 		return
 	var remote: Dictionary = (_remote_players[player_id] as Dictionary).duplicate(true)
+	# Dedicated-world generation is normally centered on the hidden host avatar.
+	# A real guest can move into another procedural chunk while that avatar stays
+	# still, making collision queries read the not-yet-generated area as air.
+	_ensure_remote_player_physics_chunks(remote)
 	var original_player: Dictionary = game_view.sim.player
 	var simulation_player := original_player.duplicate(true)
 	for field in [
@@ -506,6 +510,17 @@ func _simulate_remote_player_input(player_id: String, move_left: bool, move_righ
 	_remote_players[player_id] = remote
 	_store_remote_player_resume_state(player_id, remote)
 	game_view.remote_players = _remote_players
+
+
+func _ensure_remote_player_physics_chunks(remote: Dictionary) -> void:
+	if remote.is_empty() or not game_view.sim.has_method("ensure_generated_chunk"):
+		return
+	var tile_x := floori(float(remote.get("x", 0.0)) / float(BlockDefs.TILE))
+	var center_chunk := floori(float(tile_x) / float(WorldSim.CHUNK_WIDTH))
+	# Keep the current and adjacent chunks ready so a boundary crossing cannot
+	# advance one physics frame through an ungenerated collision map.
+	for chunk_x in range(center_chunk - 1, center_chunk + 2):
+		game_view.sim.ensure_generated_chunk(chunk_x)
 
 
 static func normalized_fake_player_count(requested_count: int) -> int:
