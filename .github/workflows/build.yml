@@ -28,12 +28,28 @@ jobs:
           release="${GODOT_VERSION}-stable"
           base="https://github.com/godotengine/godot-builds/releases/download/${release}"
           curl -fsSLO "${base}/Godot_v${release}_linux.x86_64.zip"
-          unzip -q "Godot_v${release}_linux.x86_64.zip"
+          python3 - "Godot_v${release}_linux.x86_64.zip" <<'PY'
+          from pathlib import Path
+          from sys import argv
+          from zipfile import ZipFile
+
+          with ZipFile(argv[1]) as archive:
+              archive.extractall(Path.cwd())
+          PY
           mv "Godot_v${release}_linux.x86_64" godot
           chmod +x godot
           curl -fsSLO "${base}/Godot_v${release}_export_templates.tpz"
           mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
-          unzip -q "Godot_v${release}_export_templates.tpz" -d export-templates
+          python3 - "Godot_v${release}_export_templates.tpz" <<'PY'
+          from pathlib import Path
+          from sys import argv
+          from zipfile import ZipFile
+
+          destination = Path("export-templates")
+          destination.mkdir(parents=True, exist_ok=True)
+          with ZipFile(argv[1]) as archive:
+              archive.extractall(destination)
+          PY
           cp -R export-templates/templates/. \
             "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
 
