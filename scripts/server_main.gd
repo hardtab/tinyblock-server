@@ -139,6 +139,7 @@ func _start_headless_server() -> void:
 	game_view.sim.tile_changed.connect(_on_multiplayer_tile_changed)
 	game_view.sim.plant_changed.connect(_on_multiplayer_plant_changed)
 	game_view.sim.remote_player_attacked_by_creature.connect(_on_remote_player_attacked_by_creature)
+	game_view.authoritative_player_hit_by_arrow.connect(_on_authoritative_player_hit_by_arrow)
 	game_view.sim.player_defeated.connect(_headless_respawn_player)
 	# A dedicated process has no real local avatar. Weather must follow connected
 	# guests and stop while the world is empty instead of repeatedly targeting the
@@ -773,6 +774,24 @@ func _on_remote_player_attacked_by_creature(player_id: String, damage: int, knoc
 	game_view.remote_players = _remote_players
 
 
+func _on_authoritative_player_hit_by_arrow(target_player_id: String, attacker_player_id: String, damage: int) -> void:
+	if not MultiplayerClient.is_host() or target_player_id.is_empty() or attacker_player_id.is_empty():
+		return
+	if _remote_players.has(target_player_id):
+		var target: Dictionary = _remote_players[target_player_id]
+		target["health"] = maxi(0, int(target.get("health", WorldSim.MAX_PLAYER_HEALTH)) - maxi(0, damage))
+		_remote_players[target_player_id] = target
+		game_view.remote_players = _remote_players
+		if int(target.get("health", 0)) <= 0:
+			_respawn_remote_player(target_player_id)
+	MultiplayerClient.send_state("player_hit", {
+		"target_player_id": target_player_id,
+		"attacker_player_id": attacker_player_id,
+		"damage": maxi(1, damage),
+		"source": "arrow",
+	})
+
+
 func _remote_weapon_damage(player_id: String) -> int:
 	var state: Dictionary = game_view.sim.multiplayer_player_states.get(player_id, {}) if game_view.sim.multiplayer_player_states.get(player_id, {}) is Dictionary else {}
 	var inventory: Dictionary = state.get("inventory", {}) if state.get("inventory", {}) is Dictionary else {}
@@ -832,7 +851,12 @@ func _apply_pvp_attack(attacker_id: String, target_id: String) -> void:
 	_pvp_cooldowns[attacker_id] = now + WorldSim.COMBAT_ATTACK_COOLDOWN_MSEC
 	var damage: int = game_view.sim.active_weapon_damage() if attacker_id == MultiplayerClient.player_id else _remote_weapon_damage(attacker_id)
 	target["health"] = maxi(0, int(target.get("health", WorldSim.MAX_PLAYER_HEALTH)) - damage)
-	MultiplayerClient.send_state("player_hit", {"target_player_id": target_id})
+	MultiplayerClient.send_state("player_hit", {
+		"target_player_id": target_id,
+		"attacker_player_id": attacker_id,
+		"damage": damage,
+		"source": "melee",
+	})
 	target["vx"] = 3.5 if target_center.x >= attacker_center.x else -3.5
 	target["vy"] = -3.0
 	if int(target["health"]) <= 0:
