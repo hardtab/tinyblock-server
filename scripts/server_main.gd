@@ -30,6 +30,7 @@ const CATALOG_RETRY_INTERVAL := 10.0
 const CATALOG_PREFETCH_RADIUS := 1
 const CONTENT_REFRESH_INTERVAL := 60.0
 const MULTIPLAYER_SNAPSHOT_INTERVAL := 0.1
+const MULTIPLAYER_REMOTE_INPUT_TIMEOUT := 0.35
 const MULTIPLAYER_CREATURE_SNAPSHOT_INTERVAL := 0.2
 const MULTIPLAYER_WORLD_CHUNK_INTERVAL := 0.075
 const INVENTORY_RESEND_INTERVAL := 0.4
@@ -58,6 +59,7 @@ var _headless_world_name := "Tiny Block Community"
 var _headless_max_players := 16
 var _headless_fake_player_count := 0
 var _remote_players: Dictionary = {}
+var _remote_player_inputs: Dictionary = {}
 var _snapshot_outgoing_transfers: Dictionary = {}
 var _snapshot_send_queue: Array[Dictionary] = []
 var _snapshot_send_time_left := 0.0
@@ -349,6 +351,8 @@ func _on_multiplayer_message(message: Dictionary) -> void:
 			_retry_world_snapshot(sender, command_payload)
 		elif type == "player_snapshot":
 			_accept_remote_player_snapshot(sender, command_payload)
+		elif type == "player_input":
+			_accept_remote_player_input(sender, command_payload)
 		elif type == "attack_player":
 			_apply_pvp_attack(sender, str(command_payload.get("target_player_id", "")))
 		elif type == "player_defeated":
@@ -368,6 +372,7 @@ func _on_multiplayer_message(message: Dictionary) -> void:
 			_store_remote_player_resume_state(left_player_id, _remote_players[left_player_id])
 			_mark_world_dirty()
 		_remote_players.erase(left_player_id)
+		_remote_player_inputs.erase(left_player_id)
 		_remote_respawn_protected_until_msec.erase(left_player_id)
 		_pending_inventory_resends.erase(left_player_id)
 		game_view.remote_players = _remote_players
@@ -381,6 +386,7 @@ func _tick_multiplayer(delta: float) -> void:
 	if not MultiplayerClient.is_host() or not _world_started:
 		return
 	_prune_stale_remote_players(Time.get_ticks_msec())
+	_tick_remote_player_inputs(delta)
 	_multiplayer_position_time_left -= delta
 	_multiplayer_creature_time_left -= delta
 	if _multiplayer_position_time_left <= 0.0:
@@ -433,6 +439,73 @@ func _tick_multiplayer(delta: float) -> void:
 				int(creature.get("carried_materials", 0)),
 			])
 		MultiplayerClient.send_state("creatures_snapshot", {"creatures": snapshot})
+
+
+func _accept_remote_player_input(player_id: String, raw_payload: Variant) -> void:
+	if not MultiplayerClient.is_host() or player_id.is_empty() or not _remote_players.has(player_id):
+		return
+	if not raw_payload is Dictionary:
+		return
+	var payload := raw_payload as Dictionary
+	var prior: Dictionary = _remote_players[player_id]
+	_remote_player_inputs[player_id] = {
+		"left": bool(payload.get("left", false)),
+		"right": bool(payload.get("right", false)),
+		"jump": bool(payload.get("jump", false)),
+		"received_msec": Time.get_ticks_msec(),
+	}
+	prior["_input_authoritative"] = true
+	_remote_players[player_id] = prior
+
+
+func _tick_remote_player_inputs(delta: float) -> void:
+	if not MultiplayerClient.is_host() or delta <= 0.0:
+		return
+	var now := Time.get_ticks_msec()
+	for raw_player_id in _remote_player_inputs.keys():
+		var player_id := str(raw_player_id)
+		if not _remote_players.has(player_id):
+			_remote_player_inputs.erase(player_id)
+			continue
+		var input: Dictionary = _remote_player_inputs[player_id]
+		var input_age := float(now - int(input.get("received_msec", now))) / 1000.0
+		var input_live := input_age <= MULTIPLAYER_REMOTE_INPUT_TIMEOUT
+		_simulate_remote_player_input(
+			player_id,
+			bool(input.get("left", false)) if input_live else false,
+			bool(input.get("right", false)) if input_live else false,
+			bool(input.get("jump", false)) if input_live else false,
+			delta,
+		)
+
+
+func _simulate_remote_player_input(player_id: String, move_left: bool, move_right: bool, jump: bool, delta: float) -> void:
+	if not _remote_players.has(player_id):
+		return
+	var remote: Dictionary = (_remote_players[player_id] as Dictionary).duplicate(true)
+	var original_player: Dictionary = game_view.sim.player
+	var simulation_player := original_player.duplicate(true)
+	for field in [
+		"x", "y", "facing", "vx", "vy", "on_ground", "health", "nourishment",
+		"jump_coyote", "tree_ghost", "climbing", "climb_col", "squash",
+	]:
+		if remote.has(field):
+			simulation_player[field] = remote[field]
+	game_view.sim.player = simulation_player
+	game_view.sim.move_player(move_left, move_right, jump, delta)
+	var next_player: Dictionary = game_view.sim.player.duplicate(true)
+	game_view.sim.player = original_player
+	for field in [
+		"x", "y", "facing", "vx", "vy", "on_ground", "health", "nourishment",
+		"jump_coyote", "tree_ghost", "climbing", "climb_col", "squash",
+	]:
+		if next_player.has(field):
+			remote[field] = next_player[field]
+	remote["_input_authoritative"] = true
+	remote["_received_msec"] = Time.get_ticks_msec()
+	_remote_players[player_id] = remote
+	_store_remote_player_resume_state(player_id, remote)
+	game_view.remote_players = _remote_players
 
 
 static func normalized_fake_player_count(requested_count: int) -> int:
@@ -657,6 +730,7 @@ func _prune_stale_remote_players(now_msec: int) -> void:
 		if not remote.is_empty():
 			_store_remote_player_resume_state(player_id, remote)
 		_remote_players.erase(player_id)
+		_remote_player_inputs.erase(player_id)
 		_remote_respawn_protected_until_msec.erase(player_id)
 		_pending_inventory_resends.erase(player_id)
 	game_view.remote_players = _remote_players
@@ -679,6 +753,14 @@ func _accept_remote_player_snapshot(player_id: String, raw_payload: Variant) -> 
 		return
 	var payload := raw_payload as Dictionary
 	var prior: Dictionary = _remote_players.get(player_id, {})
+	if bool(prior.get("_input_authoritative", false)):
+		var input_remote := prior.duplicate(true)
+		input_remote["_received_msec"] = Time.get_ticks_msec()
+		input_remote["skin"] = _validated_multiplayer_skin(payload.get("skin", prior.get("skin", {})))
+		input_remote["equipment_slots"] = _validated_multiplayer_equipment(payload.get("equipment_slots", prior.get("equipment_slots", {})))
+		_remote_players[player_id] = input_remote
+		game_view.remote_players = _remote_players
+		return
 	var authoritative_respawn_revision := int(prior.get("respawn_revision", 0))
 	var incoming_respawn_revision := int(payload.get("respawn_revision", -1))
 	var legacy_respawn_protected := (
