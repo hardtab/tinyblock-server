@@ -13,7 +13,7 @@ env:
 jobs:
   build:
     name: Test and build server
-    runs-on: [self-hosted, Linux, X64, supercheap-dev]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
@@ -81,7 +81,7 @@ jobs:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
-    runs-on: [self-hosted, Linux, X64, supercheap-dev]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
