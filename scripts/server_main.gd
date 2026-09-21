@@ -458,6 +458,7 @@ func _tick_multiplayer(delta: float) -> void:
 		MultiplayerClient.send_state("players_snapshot", {
 			"players": players,
 			"world_time_tick": game_view.sim.world_time_tick,
+			"active_projectiles": _multiplayer_projectile_snapshot(),
 		})
 		if not _pending_tile_deltas.is_empty():
 			MultiplayerClient.send_state("tile_batch", {"tiles": _pending_tile_deltas.values()})
@@ -628,6 +629,39 @@ func _local_equipment_snapshot() -> Dictionary:
 	}
 
 
+func _multiplayer_projectile_snapshot() -> Array:
+	# Replicate only compact authoritative trajectory data. Visual clients still
+	# receive the full bow_shot event; the bot needs this stream to intercept an
+	# incoming arrow before it reaches its avatar.
+	var result: Array = []
+	for raw_arrow in game_view.arrows:
+		if not raw_arrow is Dictionary:
+			continue
+		var arrow := raw_arrow as Dictionary
+		var position: Vector2 = arrow.get("position", Vector2(INF, INF)) if arrow.get("position", Vector2(INF, INF)) is Vector2 else Vector2(INF, INF)
+		var velocity: Vector2 = arrow.get("velocity", Vector2.ZERO) if arrow.get("velocity", Vector2.ZERO) is Vector2 else Vector2.ZERO
+		if not is_finite(position.x) or not is_finite(position.y) or not is_finite(velocity.x) or not is_finite(velocity.y) or velocity.length_squared() < 1.0:
+			continue
+		var shot_id := str(arrow.get("shot_id", ""))
+		if shot_id.is_empty():
+			continue
+		result.append({
+			"id": "arrow:%s" % shot_id,
+			"kind": "arrow",
+			"shot_id": shot_id,
+			"owner_player_id": str(arrow.get("owner_player_id", "")),
+			"x": position.x,
+			"y": position.y,
+			"vx": velocity.x,
+			"vy": velocity.y,
+			"age": maxf(0.0, float(arrow.get("age", 0.0))),
+			"damage": maxi(1, int(arrow.get("damage", 1))),
+		})
+		if result.size() >= 64:
+			break
+	return result
+
+
 # ---------------------------------------------------------------------------
 # World snapshot transfer
 # ---------------------------------------------------------------------------
@@ -642,6 +676,7 @@ func _send_world_snapshot(target_player_id: String) -> void:
 			_snapshot_outgoing_transfers.erase(raw_transfer_id)
 	var transfer_id := "snapshot_%d" % Time.get_ticks_msec()
 	var snapshot: Dictionary = game_view.sim.serialize_state()
+	snapshot["active_projectiles"] = _multiplayer_projectile_snapshot()
 	var multiplayer: Dictionary = snapshot.get("multiplayer", {}) if snapshot.get("multiplayer", {}) is Dictionary else {}
 	var saved_states: Dictionary = multiplayer.get("player_states", {}) if multiplayer.get("player_states", {}) is Dictionary else {}
 	var active_states: Dictionary = {}
