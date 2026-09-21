@@ -353,11 +353,15 @@ func _on_multiplayer_message(message: Dictionary) -> void:
 			_accept_remote_player_snapshot(sender, command_payload)
 		elif type == "player_input":
 			_accept_remote_player_input(sender, command_payload)
+		elif type == "mine_progress":
+			_broadcast_world_event(sender, command_payload, "mine_progress")
+		elif type == "world_action_event":
+			_broadcast_world_event(sender, command_payload, str(command_payload.get("event", command_payload.get("sound", ""))))
 		elif type == "attack_player":
 			_apply_pvp_attack(sender, str(command_payload.get("target_player_id", "")))
 		elif type == "player_defeated":
 			_respawn_remote_player(sender, int(command_payload.get("respawn_revision", -1)))
-		elif type in ["mine_block", "place_block", "attack_creature", "interact_creature", "recover_death_cache", "recover_one_use_cache"]:
+		elif type in ["mine_block", "place_block", "open_container", "craft_recipe", "attack_creature", "interact_creature", "recover_death_cache", "recover_one_use_cache"]:
 			_apply_remote_world_action(sender, type, command_payload)
 		elif type == "inventory_snapshot":
 			_store_remote_inventory(sender, command_payload)
@@ -376,6 +380,20 @@ func _on_multiplayer_message(message: Dictionary) -> void:
 		_remote_respawn_protected_until_msec.erase(left_player_id)
 		_pending_inventory_resends.erase(left_player_id)
 		game_view.remote_players = _remote_players
+
+
+func _broadcast_world_event(player_id: String, raw_payload: Dictionary, event_name: String) -> void:
+	if player_id.is_empty() or not _remote_players.has(player_id) or event_name.is_empty():
+		return
+	if event_name not in ["mine_progress", "mine_complete", "mine_cancel", "craft", "place_block", "attack", "chest_open"]:
+		return
+	if event_name == "mine_progress" and (int(raw_payload.get("stage", -1)) < 0 or int(raw_payload.get("stage", -1)) > 5):
+		return
+	var event := raw_payload.duplicate(true)
+	event["event"] = event_name
+	event["sound"] = str(event.get("sound", event_name))
+	event["player_id"] = player_id
+	MultiplayerClient.send_state("world_action_event", event)
 
 
 # ---------------------------------------------------------------------------
@@ -1016,6 +1034,9 @@ func _apply_remote_world_action(player_id: String, action: String, payload: Dict
 	var action_tx := int(payload.get("x", WorldSim.COORD_LIMIT + 1))
 	var action_ty := int(payload.get("y", WorldSim.COORD_LIMIT + 1))
 	var action_pos := Vector2i(action_tx, action_ty)
+	var original_action_block_name := ""
+	if game_view.sim.in_bounds(action_tx, action_ty):
+		original_action_block_name = str(game_view.sim.get_block(action_tx, action_ty).get("name", ""))
 	var plant_anchor_before := action_pos
 	var had_plant_before := false
 	if game_view.sim.plant_cells.has(action_pos):
@@ -1074,6 +1095,30 @@ func _apply_remote_world_action(player_id: String, action: String, payload: Dict
 		var cache_pos := Vector2i(action_tx, action_ty)
 		if game_view.sim.player_near(action_tx, action_ty) and game_view.sim.is_one_use_cache_at(action_tx, action_ty):
 			action_applied = game_view.sim.recover_one_use_cache(cache_pos)
+	elif action == "open_container":
+		if game_view.sim.in_bounds(action_tx, action_ty) and game_view.sim.player_near(action_tx, action_ty):
+			var container_pos := Vector2i(action_tx, action_ty)
+			if game_view.sim.is_death_cache_at(action_tx, action_ty):
+				action_applied = game_view.sim.recover_death_cache(container_pos, player_id)
+			elif game_view.sim.is_one_use_cache_at(action_tx, action_ty):
+				action_applied = game_view.sim.recover_one_use_cache(container_pos)
+			elif game_view.sim.try_open_chest(action_tx, action_ty):
+				var contents: Dictionary = game_view.sim.container_contents()
+				for block_name in contents:
+					game_view.sim.take_container_stack(str(block_name))
+				game_view.sim.close_container()
+				action_applied = true
+	elif action == "craft_recipe":
+		var requested_output := str(payload.get("output", ""))
+		if not requested_output.is_empty():
+			for recipe: Dictionary in game_view.sim.get_all_recipes():
+				var outputs: Dictionary = recipe.get("out", {}) if recipe.get("out", {}) is Dictionary else {}
+				if int(outputs.get(requested_output, 0)) <= 0:
+					continue
+				if game_view.sim.fill_craft_from_recipe(recipe):
+					var crafted: Dictionary = game_view.sim.craft_output()
+					action_applied = str(crafted.get("item", "")) == requested_output
+					break
 	game_view.sim.player = original_player
 	var captured_guest_state := _capture_inventory_state()
 	captured_guest_state["inventory_host_revision"] = (
@@ -1089,7 +1134,7 @@ func _apply_remote_world_action(player_id: String, action: String, payload: Dict
 	game_view.sim.selected = original_selected
 	_applying_multiplayer_state = false
 	_queue_authoritative_inventory(player_id, updated_guest_state)
-	if action in ["mine_block", "place_block", "recover_death_cache", "recover_one_use_cache"] and game_view.sim.in_bounds(action_tx, action_ty):
+	if action in ["mine_block", "place_block", "open_container", "recover_death_cache", "recover_one_use_cache"] and game_view.sim.in_bounds(action_tx, action_ty):
 		var result_pos := Vector2i(action_tx, action_ty)
 		var action_result := {
 			"action": action,
@@ -1106,7 +1151,32 @@ func _apply_remote_world_action(player_id: String, action: String, payload: Dict
 			action_result["plant"] = game_view.sim.multiplayer_plant_state(plant_anchor_after)
 		elif had_plant_before:
 			action_result["plant"] = game_view.sim.multiplayer_plant_state(plant_anchor_before)
+		if action == "mine_block":
+			action_result["block_name"] = original_action_block_name
 		MultiplayerClient.send_state("action_result", action_result, player_id)
+	elif action == "craft_recipe":
+		MultiplayerClient.send_state("action_result", {
+			"action": action,
+			"accepted": action_applied,
+			"output": str(payload.get("output", "")),
+		}, player_id)
+	if action_applied:
+		var event_name := ""
+		match action:
+			"mine_block": event_name = "mine_complete"
+			"place_block": event_name = "place_block"
+			"open_container": event_name = "chest_open"
+			"craft_recipe": event_name = "craft"
+			"attack_creature", "interact_creature": event_name = "attack"
+		if not event_name.is_empty():
+			var event := {
+				"event": event_name,
+				"sound": event_name,
+				"x": action_tx,
+				"y": action_ty,
+				"block_name": original_action_block_name if action == "mine_block" else str(payload.get("block_name", "")),
+			}
+			_broadcast_world_event(player_id, event, event_name)
 	_mark_world_dirty()
 
 
