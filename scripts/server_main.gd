@@ -626,6 +626,8 @@ func _send_world_snapshot(target_player_id: String) -> void:
 		var player_id := str(raw_player_id)
 		if saved_states.get(player_id, null) is Dictionary:
 			active_states[player_id] = (saved_states[player_id] as Dictionary).duplicate(true)
+		elif _remote_players[raw_player_id] is Dictionary:
+			active_states[player_id] = (_remote_players[raw_player_id] as Dictionary).duplicate(true)
 	# The dedicated process has no visible local player. Persisted guest states
 	# are therefore the only legitimate roster entries in its snapshot.
 	multiplayer["player_states"] = active_states
