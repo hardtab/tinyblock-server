@@ -392,13 +392,36 @@ func _broadcast_world_event(player_id: String, raw_payload: Dictionary, event_na
 		return
 	if event_name not in ["mine_progress", "mine_complete", "mine_cancel", "craft", "place_block", "attack", "chest_open"]:
 		return
-	if event_name == "mine_progress" and (int(raw_payload.get("stage", -1)) < 0 or int(raw_payload.get("stage", -1)) > 5):
-		return
+	if event_name == "mine_progress":
+		if int(raw_payload.get("stage", -1)) < 0 or int(raw_payload.get("stage", -1)) > 5:
+			return
+		if not mining_progress_target_is_present(game_view.sim, raw_payload):
+			# A delayed progress packet must not make other clients draw cracks
+			# after the authoritative tile has already been removed or replaced.
+			return
 	var event := raw_payload.duplicate(true)
 	event["event"] = event_name
 	event["sound"] = str(event.get("sound", event_name))
 	event["player_id"] = player_id
 	MultiplayerClient.send_state("world_action_event", event)
+
+
+static func mining_progress_target_is_present(sim: RefCounted, payload: Dictionary) -> bool:
+	var tx := int(payload.get("x", WorldSim.COORD_LIMIT + 1))
+	var ty := int(payload.get("y", WorldSim.COORD_LIMIT + 1))
+	if not sim.in_bounds(tx, ty):
+		return false
+	var block: Dictionary = sim.get_block(tx, ty) if sim.get_block(tx, ty) is Dictionary else {}
+	var block_present := int(block.get("id", 0)) != 0
+	var plant: Dictionary = sim.plant_block_at(tx, ty) if sim.plant_block_at(tx, ty) is Dictionary else {}
+	if not block_present and plant.is_empty():
+		return false
+	var expected_name := str(payload.get("block_name", ""))
+	if expected_name.is_empty():
+		return true
+	if expected_name == str(block.get("name", "")) or expected_name == str(block.get("content_id", "")):
+		return true
+	return expected_name == str(plant.get("name", "")) or expected_name == str(plant.get("content_id", ""))
 
 
 # ---------------------------------------------------------------------------

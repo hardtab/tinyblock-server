@@ -18,6 +18,7 @@ func _ready() -> void:
 	_test_silent_peer_recovery_contract()
 	_test_authoritative_inventory_reconciliation()
 	_test_join_inventory_snapshot_state()
+	_test_mining_progress_target_validation()
 	_test_dedicated_weather_targets_real_players()
 	_test_fake_player_flag_contract()
 	_test_headless_rehost_backoff_contract()
@@ -153,6 +154,25 @@ func _test_join_inventory_snapshot_state() -> void:
 		"dedicated initial snapshot preserves the joining player's inventory",
 	)
 	_assert(not snapshot_states.has("offline_guest"), "dedicated initial snapshot does not leak inactive inventories")
+
+
+func _test_mining_progress_target_validation() -> void:
+	var sim := WorldSim.new()
+	sim.create_island()
+	var target := Vector2i(WorldSim.COORD_LIMIT + 1, WorldSim.COORD_LIMIT + 1)
+	for raw_pos in sim.tiles.keys():
+		var candidate := raw_pos as Vector2i
+		if sim.block_id(candidate.x, candidate.y) != 0:
+			target = candidate
+			break
+	_assert(target.x <= WorldSim.COORD_LIMIT, "mining validation finds a solid target tile")
+	if target.x > WorldSim.COORD_LIMIT:
+		return
+	var block := sim.get_block(target.x, target.y)
+	var payload := {"x": target.x, "y": target.y, "stage": 2, "block_name": str(block.get("name", ""))}
+	_assert(ServerMainClass.mining_progress_target_is_present(sim, payload), "progress is valid while its block exists")
+	sim.set_block(target.x, target.y, 0)
+	_assert(not ServerMainClass.mining_progress_target_is_present(sim, payload), "progress is rejected after its block disappears")
 
 
 func _test_dedicated_weather_targets_real_players() -> void:
