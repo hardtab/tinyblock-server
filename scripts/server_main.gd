@@ -618,7 +618,19 @@ func _send_world_snapshot(target_player_id: String) -> void:
 		if str(old_transfer.get("target_player_id", "")) == target_player_id:
 			_snapshot_outgoing_transfers.erase(raw_transfer_id)
 	var transfer_id := "snapshot_%d" % Time.get_ticks_msec()
-	var raw := JSON.stringify(game_view.sim.serialize_state()).to_utf8_buffer()
+	var snapshot: Dictionary = game_view.sim.serialize_state()
+	var multiplayer: Dictionary = snapshot.get("multiplayer", {}) if snapshot.get("multiplayer", {}) is Dictionary else {}
+	var saved_states: Dictionary = multiplayer.get("player_states", {}) if multiplayer.get("player_states", {}) is Dictionary else {}
+	var active_states: Dictionary = {}
+	for raw_player_id in _remote_players:
+		var player_id := str(raw_player_id)
+		if saved_states.get(player_id, null) is Dictionary:
+			active_states[player_id] = (saved_states[player_id] as Dictionary).duplicate(true)
+	# The dedicated process has no visible local player. Persisted guest states
+	# are therefore the only legitimate roster entries in its snapshot.
+	multiplayer["player_states"] = active_states
+	snapshot["multiplayer"] = multiplayer
+	var raw := JSON.stringify(snapshot).to_utf8_buffer()
 	var encoded := Marshalls.raw_to_base64(raw.compress(FileAccess.COMPRESSION_GZIP))
 	const CHUNK_SIZE := 12000
 	var total := ceili(float(encoded.length()) / float(CHUNK_SIZE))
