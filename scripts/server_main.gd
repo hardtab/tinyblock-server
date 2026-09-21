@@ -628,6 +628,7 @@ func _send_world_snapshot(target_player_id: String) -> void:
 			active_states[player_id] = (saved_states[player_id] as Dictionary).duplicate(true)
 		elif _remote_players[raw_player_id] is Dictionary:
 			active_states[player_id] = (_remote_players[raw_player_id] as Dictionary).duplicate(true)
+	active_states = snapshot_player_states_for_join(active_states, saved_states, target_player_id)
 	# The dedicated process has no visible local player. Persisted guest states
 	# are therefore the only legitimate roster entries in its snapshot.
 	multiplayer["player_states"] = active_states
@@ -645,6 +646,17 @@ func _send_world_snapshot(target_player_id: String) -> void:
 		"expires_at": Time.get_ticks_msec() + 300_000,
 	}
 	_queue_snapshot_chunks(transfer_id, target_player_id, range(total))
+
+
+static func snapshot_player_states_for_join(active_states: Dictionary, saved_states: Dictionary, target_player_id: String) -> Dictionary:
+	# Include only the authenticated target's saved state in its initial snapshot.
+	var result := active_states.duplicate(true)
+	if target_player_id.is_empty():
+		return result
+	var saved_state: Variant = saved_states.get(target_player_id, null)
+	if saved_state is Dictionary:
+		result[target_player_id] = (saved_state as Dictionary).duplicate(true)
+	return result
 
 
 func _retry_world_snapshot(target_player_id: String, payload: Dictionary) -> void:

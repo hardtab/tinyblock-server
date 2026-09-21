@@ -17,6 +17,7 @@ func _ready() -> void:
 	_test_stale_remote_players_are_pruned()
 	_test_silent_peer_recovery_contract()
 	_test_authoritative_inventory_reconciliation()
+	_test_join_inventory_snapshot_state()
 	_test_dedicated_weather_targets_real_players()
 	_test_fake_player_flag_contract()
 	_test_headless_rehost_backoff_contract()
@@ -133,6 +134,25 @@ func _test_authoritative_inventory_reconciliation() -> void:
 	var reconciled: Dictionary = ServerMainClass.reconcile_stale_inventory_ack(authoritative, stale_guest_snapshot)
 	_assert(int(reconciled.get("inventory_client_revision", 0)) == 2, "stale guest mutations cannot make it reject the latest mining award")
 	_assert(int((reconciled.get("inventory", {}) as Dictionary).get("stone", 0)) == 3, "stale guest snapshots cannot erase authoritative mining drops")
+
+
+func _test_join_inventory_snapshot_state() -> void:
+	var active_states := {"other_guest": {"x": 12.0}}
+	var saved_states := {
+		"joining_guest": {"inventory": {"bow": 1, "arrow": 12}, "inventory_host_revision": 4},
+		"offline_guest": {"inventory": {"stone": 3}},
+	}
+	var snapshot_states: Dictionary = ServerMainClass.snapshot_player_states_for_join(
+		active_states,
+		saved_states,
+		"joining_guest",
+	)
+	_assert(snapshot_states.has("joining_guest"), "dedicated initial snapshot includes the joining player's saved state")
+	_assert(
+		int((snapshot_states["joining_guest"] as Dictionary).get("inventory", {}).get("bow", 0)) == 1,
+		"dedicated initial snapshot preserves the joining player's inventory",
+	)
+	_assert(not snapshot_states.has("offline_guest"), "dedicated initial snapshot does not leak inactive inventories")
 
 
 func _test_dedicated_weather_targets_real_players() -> void:
