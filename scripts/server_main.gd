@@ -366,7 +366,7 @@ func _on_multiplayer_message(message: Dictionary) -> void:
 			_apply_remote_world_action(sender, type, command_payload)
 		elif type == "player_defeated":
 			_respawn_remote_player(sender, int(command_payload.get("respawn_revision", -1)))
-		elif type in ["mine_block", "place_block", "open_container", "craft_recipe", "attack_creature", "interact_creature", "recover_death_cache", "recover_one_use_cache"]:
+		elif type in ["mine_block", "place_block", "open_container", "craft_recipe", "attack_creature", "interact_creature", "recover_death_cache", "recover_one_use_cache", "equip_item"]:
 			_apply_remote_world_action(sender, type, command_payload)
 		elif type == "inventory_snapshot":
 			_store_remote_inventory(sender, command_payload)
@@ -1089,6 +1089,10 @@ func _apply_remote_world_action(player_id: String, action: String, payload: Dict
 		var charge := float(payload.get("charge", 0.0))
 		if is_finite(direction.x) and is_finite(direction.y) and is_finite(charge) and direction.length() >= 0.1:
 			action_applied = not game_view.fire_authoritative_bow(direction, clampf(charge, 0.0, 1.0), player_id).is_empty()
+	elif action == "equip_item":
+		var item_name := str(payload.get("item", ""))
+		if not item_name.is_empty() and game_view.sim.inventory.get(item_name, 0) > 0:
+			action_applied = game_view.sim.equip_item(item_name)
 	elif action == "mine_block":
 		if game_view.sim.in_bounds(action_tx, action_ty) and game_view.sim.player_near(action_tx, action_ty):
 			var had_block: bool = game_view.sim.block_id(action_tx, action_ty) != 0
@@ -1203,6 +1207,13 @@ func _apply_remote_world_action(player_id: String, action: String, payload: Dict
 		MultiplayerClient.send_state("action_result", {
 			"action": action,
 			"accepted": action_applied,
+		}, player_id)
+	elif action == "equip_item":
+		MultiplayerClient.send_state("action_result", {
+			"action": action,
+			"accepted": action_applied,
+			"item": str(payload.get("item", "")),
+			"equipment_slots": updated_guest_state.get("equipment_slots", {"hand": "", "feet": ""}),
 		}, player_id)
 	if action_applied:
 		var event_name := ""
