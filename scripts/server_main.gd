@@ -141,6 +141,9 @@ func _start_headless_server() -> void:
 	game_view.sim.tile_changed.connect(_on_multiplayer_tile_changed)
 	game_view.sim.plant_changed.connect(_on_multiplayer_plant_changed)
 	game_view.sim.remote_player_attacked_by_creature.connect(_on_remote_player_attacked_by_creature)
+	game_view.bow_shot_created.connect(_on_bow_shot_created)
+	game_view.bow_arrow_embedded.connect(_on_bow_arrow_embedded)
+	game_view.bow_arrow_collected.connect(_on_bow_arrow_collected)
 	game_view.authoritative_player_hit_by_arrow.connect(_on_authoritative_player_hit_by_arrow)
 	game_view.sim.player_defeated.connect(_headless_respawn_player)
 	# A dedicated process has no real local avatar. Weather must follow connected
@@ -359,6 +362,8 @@ func _on_multiplayer_message(message: Dictionary) -> void:
 			_broadcast_world_event(sender, command_payload, str(command_payload.get("event", command_payload.get("sound", ""))))
 		elif type == "attack_player":
 			_apply_pvp_attack(sender, str(command_payload.get("target_player_id", "")))
+		elif type == "fire_bow":
+			_apply_remote_world_action(sender, type, command_payload)
 		elif type == "player_defeated":
 			_respawn_remote_player(sender, int(command_payload.get("respawn_revision", -1)))
 		elif type in ["mine_block", "place_block", "open_container", "craft_recipe", "attack_creature", "interact_creature", "recover_death_cache", "recover_one_use_cache"]:
@@ -907,6 +912,21 @@ func _on_authoritative_player_hit_by_arrow(target_player_id: String, attacker_pl
 	})
 
 
+func _on_bow_shot_created(payload: Dictionary) -> void:
+	if MultiplayerClient.is_host():
+		MultiplayerClient.send_state("bow_shot", payload)
+
+
+func _on_bow_arrow_embedded(payload: Dictionary) -> void:
+	if MultiplayerClient.is_host():
+		MultiplayerClient.send_state("bow_arrow_embedded", payload)
+
+
+func _on_bow_arrow_collected(payload: Dictionary) -> void:
+	if MultiplayerClient.is_host():
+		MultiplayerClient.send_state("bow_arrow_collected", payload)
+
+
 func _remote_weapon_damage(player_id: String) -> int:
 	var state: Dictionary = game_view.sim.multiplayer_player_states.get(player_id, {}) if game_view.sim.multiplayer_player_states.get(player_id, {}) is Dictionary else {}
 	var inventory: Dictionary = state.get("inventory", {}) if state.get("inventory", {}) is Dictionary else {}
@@ -1050,7 +1070,12 @@ func _apply_remote_world_action(player_id: String, action: String, payload: Dict
 		if remote.has(field):
 			remote_simulation_player[field] = remote[field]
 	game_view.sim.player = remote_simulation_player
-	if action == "mine_block":
+	if action == "fire_bow":
+		var direction := Vector2(float(payload.get("direction_x", 0.0)), float(payload.get("direction_y", 0.0)))
+		var charge := float(payload.get("charge", 0.0))
+		if is_finite(direction.x) and is_finite(direction.y) and is_finite(charge) and direction.length() >= 0.1:
+			action_applied = not game_view.fire_authoritative_bow(direction, clampf(charge, 0.0, 1.0), player_id).is_empty()
+	elif action == "mine_block":
 		if game_view.sim.in_bounds(action_tx, action_ty) and game_view.sim.player_near(action_tx, action_ty):
 			var had_block: bool = game_view.sim.block_id(action_tx, action_ty) != 0
 			var had_plant: bool = not game_view.sim.plant_block_at(action_tx, action_ty).is_empty()
@@ -1160,6 +1185,11 @@ func _apply_remote_world_action(player_id: String, action: String, payload: Dict
 			"accepted": action_applied,
 			"output": str(payload.get("output", "")),
 		}, player_id)
+	elif action == "fire_bow":
+		MultiplayerClient.send_state("action_result", {
+			"action": action,
+			"accepted": action_applied,
+		}, player_id)
 	if action_applied:
 		var event_name := ""
 		match action:
@@ -1168,6 +1198,7 @@ func _apply_remote_world_action(player_id: String, action: String, payload: Dict
 			"open_container": event_name = "chest_open"
 			"craft_recipe": event_name = "craft"
 			"attack_creature", "interact_creature": event_name = "attack"
+			"fire_bow": event_name = "attack"
 		if not event_name.is_empty():
 			var event := {
 				"event": event_name,
