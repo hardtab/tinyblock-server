@@ -11,6 +11,7 @@ var test_dir := "user://tinyblock-server-tests"
 
 func _ready() -> void:
 	_test_headless_input_contract()
+	_test_loaded_host_low_bounce_takeoff()
 	_test_all_modes_roundtrip()
 	_test_persistent_store()
 	_test_dedicated_roster_contract()
@@ -26,6 +27,23 @@ func _ready() -> void:
 	if failures == 0:
 		print("PASS: all five modes boot and round-trip, persistence reloads, dedicated host stays hidden")
 	get_tree().quit(failures)
+
+
+func _test_loaded_host_low_bounce_takeoff() -> void:
+	var sim := WorldSim.new()
+	sim.set_block(0, 8, int(BlockDefs.BLOCKS.planks.id))
+	sim.set_block(1, 7, int(BlockDefs.BLOCKS.workbench.id))
+	sim.player.x = 12.0
+	sim.player.y = 228.0
+	sim.player.vx = 0.0
+	sim.player.vy = -0.171
+	sim.player.on_ground = false
+	sim.player.jump_coyote = 0.0
+	var min_y := 228.0
+	for frame in range(45):
+		sim.move_player(false, true, true, 1.0 / 20.0)
+		min_y = minf(min_y, float(sim.player.y))
+	_assert(min_y < 190.0 and float(sim.player.x) > 18.0, "loaded host settles microscopic floor rebounds and permits a real step-up jump")
 
 
 func _test_headless_input_contract() -> void:
