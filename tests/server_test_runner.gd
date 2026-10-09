@@ -19,6 +19,7 @@ func _ready() -> void:
 	_test_silent_peer_recovery_contract()
 	_test_authoritative_inventory_reconciliation()
 	_test_join_inventory_snapshot_state()
+	_test_snapshot_send_queue_liveness()
 	_test_mining_progress_target_validation()
 	_test_dedicated_weather_targets_real_players()
 	_test_fake_player_flag_contract()
@@ -172,6 +173,97 @@ func _test_join_inventory_snapshot_state() -> void:
 		"dedicated initial snapshot preserves the joining player's inventory",
 	)
 	_assert(not snapshot_states.has("offline_guest"), "dedicated initial snapshot does not leak inactive inventories")
+
+
+func _test_snapshot_send_queue_liveness() -> void:
+	var queue: Array[Dictionary] = [
+		{"type": "snapshot_start", "payload": {"transfer_id": "disconnected-transfer"}, "target": "disconnected-guest"},
+		{"type": "snapshot_chunk", "payload": {"transfer_id": "disconnected-transfer", "index": 0}, "target": "disconnected-guest"},
+		{"type": "snapshot_start", "payload": {"transfer_id": "guest-a-transfer"}, "target": "guest-a"},
+		{"type": "snapshot_chunk", "payload": {"transfer_id": "guest-a-transfer", "index": 0}, "target": "guest-a"},
+		{"type": "snapshot_complete", "payload": {"transfer_id": "guest-a-transfer"}, "target": "guest-a"},
+		{"type": "snapshot_start", "payload": {"transfer_id": "guest-b-transfer"}, "target": "guest-b"},
+		{"type": "snapshot_complete", "payload": {"transfer_id": "guest-b-transfer"}, "target": "guest-b"},
+		{"type": "region_start", "payload": {"transfer_id": "expired-transfer"}, "target": "guest-c"},
+	]
+	var transfers := {
+		"disconnected-transfer": {"target_player_id": "disconnected-guest", "expires_at": 2000},
+		"guest-a-transfer": {"target_player_id": "guest-a", "expires_at": 2000},
+		"guest-b-transfer": {"target_player_id": "guest-b", "expires_at": 2000},
+		"expired-transfer": {"target_player_id": "guest-c", "expires_at": 999},
+	}
+	var pruned: Dictionary = ServerMainClass.prune_snapshot_send_state(queue, transfers, ["guest-a", "guest-b", "guest-c"], 1000)
+	var active_queue: Array[Dictionary] = pruned.get("queue", [])
+	var active_transfers: Dictionary = pruned.get("transfers", {})
+	_assert(active_queue.size() == 5, "snapshot queue prunes disconnected-target and expired-transfer messages")
+	_assert(str(active_queue[0].get("target", "")) == "guest-a", "a stale front transfer cannot block the next live guest")
+	_assert(not active_transfers.has("disconnected-transfer"), "disconnect cleanup removes the outgoing transfer")
+	_assert(not active_transfers.has("expired-transfer"), "expiry cleanup removes the outgoing transfer")
+	_assert(active_transfers.has("guest-a-transfer") and active_transfers.has("guest-b-transfer"), "live unexpired transfers remain available")
+
+	var after_transient_failure := ServerMainClass.snapshot_send_queue_after_attempt(active_queue, false, true)
+	_assert(after_transient_failure.size() == active_queue.size(), "a valid peer's transient send failure retains every queued message")
+	_assert(str(after_transient_failure[0].get("target", "")) == "guest-b", "a temporarily unavailable peer yields to another guest")
+	_assert(str(after_transient_failure[2].get("target", "")) == "guest-a", "the live peer's ordered messages remain queued for retry")
+	var after_other_guest_start_succeeds := ServerMainClass.snapshot_send_queue_after_attempt(after_transient_failure, true, true)
+	var after_other_guest_transfer_succeeds := ServerMainClass.snapshot_send_queue_after_attempt(after_other_guest_start_succeeds, true, true)
+	_assert(str(after_other_guest_transfer_succeeds[0].get("target", "")) == "guest-a", "the temporarily unavailable guest is retried after the other transfer progresses")
+	var after_retry_succeeds := ServerMainClass.snapshot_send_queue_after_attempt(after_other_guest_transfer_succeeds, true, true)
+	_assert(str(after_retry_succeeds[0].get("type", "")) == "snapshot_chunk", "successful retry advances within the original transfer order")
+
+	var client := MultiplayerClientClass.new()
+	client._handle_connected({
+		"role": "host",
+		"player_id": "headless-host",
+		"session_id": "server-test",
+		"players": [
+			{"player_id": "headless-host", "role": "host"},
+			{"player_id": "guest-a", "role": "guest"},
+			{"player_id": "guest-b", "role": "guest"},
+			{"player_id": "unknown-role", "role": "spectator"},
+		],
+	})
+	_assert(client.guest_peer_ids() == ["guest-a", "guest-b"], "host liveness lists only known guest peers")
+	client._handle_ws_packet(JSON.stringify({"kind": "control", "type": "player_left", "player_id": "guest-a"}).to_utf8_buffer())
+	_assert(client.guest_peer_ids() == ["guest-b"], "a departed guest is removed from queue liveness immediately")
+	client.free()
+
+	_test_snapshot_send_queue_tick_uses_peer_liveness()
+
+
+func _test_snapshot_send_queue_tick_uses_peer_liveness() -> void:
+	var client: Node = get_node("/root/MultiplayerClient")
+	var previous_role := str(client.get("role"))
+	var previous_player_id := str(client.get("player_id"))
+	var previous_known_players: Dictionary = client.get("_known_players").duplicate(true)
+	var previous_websocket_fallback := bool(client.get("websocket_fallback_enabled"))
+	client.set("role", "host")
+	client.set("player_id", "headless-host")
+	client.set("_known_players", {"headless-host": "host", "guest-a": "guest", "guest-b": "guest"})
+	client.set("websocket_fallback_enabled", false)
+
+	var server := ServerMainClass.new()
+	var expiry := Time.get_ticks_msec() + 60_000
+	var stale_front_queue: Array[Dictionary] = [
+		{"type": "snapshot_start", "payload": {"transfer_id": "dead-transfer"}, "target": "dead-guest"},
+		{"type": "snapshot_start", "payload": {"transfer_id": "live-a-transfer"}, "target": "guest-a"},
+	]
+	server.set("_snapshot_send_queue", stale_front_queue)
+	server.set("_snapshot_outgoing_transfers", {
+		"dead-transfer": {"target_player_id": "dead-guest", "expires_at": expiry},
+		"live-a-transfer": {"target_player_id": "guest-a", "expires_at": expiry},
+	})
+	server.call("_tick_snapshot_send_queue", 1.0)
+	var after_stale_front: Array = server.get("_snapshot_send_queue")
+	_assert(after_stale_front.size() == 1, "the send tick prunes a disconnected front transfer before attempting a send")
+	_assert(str(after_stale_front[0].get("target", "")) == "guest-a", "the first live guest advances after stale-front cleanup")
+	_assert(str(after_stale_front[0].get("payload", {}).get("transfer_id", "")) == "live-a-transfer", "stale-front cleanup preserves the live guest transfer")
+	server.free()
+
+	client.set("role", previous_role)
+	client.set("player_id", previous_player_id)
+	client.set("_known_players", previous_known_players)
+	client.set("websocket_fallback_enabled", previous_websocket_fallback)
 
 
 func _test_mining_progress_target_validation() -> void:

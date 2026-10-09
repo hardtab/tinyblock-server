@@ -775,24 +775,85 @@ func _queue_snapshot_chunks(transfer_id: String, target_player_id: String, index
 
 func _tick_snapshot_send_queue(delta: float) -> void:
 	var now := Time.get_ticks_msec()
-	for raw_transfer_id in _snapshot_outgoing_transfers.keys():
-		var transfer_id := str(raw_transfer_id)
-		var transfer: Dictionary = _snapshot_outgoing_transfers[transfer_id]
-		if now >= int(transfer.get("expires_at", 0)):
-			_snapshot_outgoing_transfers.erase(transfer_id)
+	var send_state := prune_snapshot_send_state(
+		_snapshot_send_queue,
+		_snapshot_outgoing_transfers,
+		MultiplayerClient.guest_peer_ids(),
+		now,
+	)
+	_snapshot_send_queue = send_state["queue"]
+	_snapshot_outgoing_transfers = send_state["transfers"]
 	if _snapshot_send_queue.is_empty() or not MultiplayerClient.is_host():
 		return
 	_snapshot_send_time_left -= delta
 	if _snapshot_send_time_left > 0.0:
 		return
 	var message: Dictionary = _snapshot_send_queue.front()
-	if MultiplayerClient.send_state(
+	var target_player_id := str(message.get("target", ""))
+	var sent := MultiplayerClient.send_state(
 		str(message.get("type", "")),
 		message.get("payload", {}) as Dictionary,
-		str(message.get("target", "")),
-	):
-		_snapshot_send_queue.pop_front()
-		_snapshot_send_time_left = MULTIPLAYER_WORLD_CHUNK_INTERVAL
+		target_player_id,
+	)
+	_snapshot_send_queue = snapshot_send_queue_after_attempt(
+		_snapshot_send_queue,
+		sent,
+		MultiplayerClient.guest_peer_ids().has(target_player_id),
+	)
+	_snapshot_send_time_left = MULTIPLAYER_WORLD_CHUNK_INTERVAL
+
+
+static func prune_snapshot_send_state(
+	queue: Array[Dictionary],
+	transfers: Dictionary,
+	live_guest_ids: Array[String],
+	now_msec: int,
+) -> Dictionary:
+	var live_guests: Dictionary = {}
+	for player_id in live_guest_ids:
+		if not player_id.is_empty():
+			live_guests[player_id] = true
+	var active_transfers: Dictionary = {}
+	for raw_transfer_id in transfers:
+		var transfer_id := str(raw_transfer_id)
+		var transfer: Dictionary = transfers[raw_transfer_id] if transfers[raw_transfer_id] is Dictionary else {}
+		var target_player_id := str(transfer.get("target_player_id", ""))
+		if not live_guests.has(target_player_id) or now_msec >= int(transfer.get("expires_at", 0)):
+			continue
+		active_transfers[transfer_id] = transfer
+	var active_queue: Array[Dictionary] = []
+	for message in queue:
+		var target_player_id := str(message.get("target", ""))
+		var payload: Dictionary = message.get("payload", {}) if message.get("payload", {}) is Dictionary else {}
+		var transfer_id := str(payload.get("transfer_id", ""))
+		if live_guests.has(target_player_id) and active_transfers.has(transfer_id):
+			active_queue.append(message)
+	return {"queue": active_queue, "transfers": active_transfers}
+
+
+static func snapshot_send_queue_after_attempt(
+	queue: Array[Dictionary],
+	sent: bool,
+	target_still_live: bool,
+) -> Array[Dictionary]:
+	var updated: Array[Dictionary] = []
+	if queue.is_empty():
+		return updated
+	if sent:
+		for index in range(1, queue.size()):
+			updated.append(queue[index])
+		return updated
+	var target_player_id := str(queue.front().get("target", ""))
+	var deferred_target_messages: Array[Dictionary] = []
+	for message in queue:
+		if str(message.get("target", "")) == target_player_id:
+			if target_still_live:
+				deferred_target_messages.append(message)
+		else:
+			updated.append(message)
+	if target_still_live:
+		updated.append_array(deferred_target_messages)
+	return updated
 
 
 func _send_requested_chunk(target_player_id: String, chunk_x: int) -> void:
