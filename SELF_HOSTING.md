@@ -83,15 +83,20 @@ World saves are stored at:
 
 ### Back up your worlds
 
-```bash
-tar czf tinyblock-backup-$(date +%Y%m%d).tar.gz ~/.local/share/godot/app_userdata/Tiny\ Block\ Server/
-```
+Do not archive the entire Godot application-data directory while the server is
+running: it can contain unrelated state, and a plain tar is neither an atomic
+checkpoint nor encrypted. For the four production community worlds, use the
+pinned-file-descriptor capture, age encryption, and offline restore check in
+[`docs/operations/world-backups.md`](docs/operations/world-backups.md). For a
+standalone self-hosted server, stop it first and copy only the selected
+`world_<id>.json` save; protect the archive and test a restore before relying on
+it.
 
 ### Restore a world
 
-1. Stop the server.
-2. Copy the saved world file matching the `--world` ID into the data directory.
-3. Restart the server.
+1. Stop the server before a manual restore.
+2. Verify the backup and copy only the saved world file matching the `--world` ID into the data directory.
+3. Confirm the configured `--world-mode` matches the save, then restart the server.
 
 ## Update
 
