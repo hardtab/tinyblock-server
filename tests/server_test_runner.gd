@@ -10,6 +10,7 @@ var test_dir := "user://tinyblock-server-tests"
 
 
 func _ready() -> void:
+	_test_avatar_appearance_contract()
 	_test_headless_input_contract()
 	_test_loaded_host_low_bounce_takeoff()
 	_test_all_modes_roundtrip()
@@ -388,3 +389,30 @@ func _cleanup() -> void:
 		for file_name in DirAccess.get_files_at(absolute):
 			DirAccess.remove_absolute(absolute.path_join(file_name))
 		DirAccess.remove_absolute(absolute)
+
+
+func _test_avatar_appearance_contract() -> void:
+	var server := ServerMainClass.new()
+	var view = load("res://gameplay/scripts/game_view.gd").new()
+	server.game_view = view
+	var skin := {
+		"skin": "#70402d", "shirt": "#ed5926", "shirt_dark": "#a72e18",
+		"accent": "#ffd35a", "pants": "#34252c", "hair": "#24191c",
+		"body_shape": "boxy", "face": "mustache", "antenna": "twin",
+		"arms": "long", "legs": "spring", "particles": "fire",
+	}
+	var expected: Dictionary = server._validated_multiplayer_skin(skin)
+	for key in ServerMainClass.MULTIPLAYER_SKIN_ENUMS:
+		_assert(expected[key] == skin[key], "dedicated server preserves avatar %s" % key)
+	server._accept_remote_player_snapshot("avatar-test", {"x": 0.0, "y": 0.0, "skin": skin})
+	_assert(server._remote_players["avatar-test"]["skin"] == expected, "dedicated host accepts the full customized avatar")
+	_assert(view.sim.multiplayer_player_states["avatar-test"]["skin"] == expected, "dedicated host persists appearance for reconnect")
+	server._remote_players["avatar-test"]["_input_authoritative"] = true
+	server._accept_remote_player_snapshot("avatar-test", {"skin": {"particles": "stars"}})
+	_assert(server._remote_players["avatar-test"]["skin"]["particles"] == "stars" and server._remote_players["avatar-test"]["skin"]["body_shape"] == "boxy", "input-authoritative appearance updates retain prior valid options")
+	var legacy: Dictionary = server._validated_multiplayer_skin({"skin": "#70402d"})
+	_assert(legacy["body_shape"] == "classic" and legacy["particles"] == "none", "legacy appearances gain safe defaults")
+	var invalid: Dictionary = server._validated_multiplayer_skin({"skin": "x".repeat(1000), "body_shape": "giant", "particles": "lava", "unknown": true})
+	_assert(not invalid.has("skin") and not invalid.has("unknown") and invalid["body_shape"] == "classic" and invalid["particles"] == "none", "invalid avatar fields are bounded and sanitized")
+	server.free()
+	view.free()

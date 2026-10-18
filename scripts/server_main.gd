@@ -37,6 +37,14 @@ const INVENTORY_RESEND_INTERVAL := 0.4
 const INVENTORY_RESEND_ATTEMPTS := 5
 const REMOTE_PLAYER_STALE_TIMEOUT_MSEC := 30_000
 const MULTIPLAYER_SKIN_KEYS := ["skin", "shirt", "shirt_dark", "accent", "pants", "hair"]
+const MULTIPLAYER_SKIN_ENUMS := {
+	"body_shape": ["classic", "round", "boxy"],
+	"face": ["none", "mustache", "whiskers"],
+	"antenna": ["none", "sprout", "twin"],
+	"arms": ["classic", "long", "tiny"],
+	"legs": ["classic", "short", "spring"],
+	"particles": ["none", "flowers", "fireflies", "stars", "sparks", "fire"],
+}
 
 @onready var game_view: Node2D = $SubViewportContainer/SubViewport/GameView
 
@@ -687,6 +695,9 @@ func _send_world_snapshot(target_player_id: String) -> void:
 		elif _remote_players[raw_player_id] is Dictionary:
 			active_states[player_id] = (_remote_players[raw_player_id] as Dictionary).duplicate(true)
 	active_states = snapshot_player_states_for_join(active_states, saved_states, target_player_id)
+	for player_id in active_states:
+		if active_states[player_id] is Dictionary:
+			active_states[player_id]["skin"] = _validated_multiplayer_skin(active_states[player_id].get("skin", {}))
 	# The dedicated process has no visible local player. Persisted guest states
 	# are therefore the only legitimate roster entries in its snapshot.
 	multiplayer["player_states"] = active_states
@@ -939,7 +950,7 @@ func _accept_remote_player_snapshot(player_id: String, raw_payload: Variant) -> 
 	if bool(prior.get("_input_authoritative", false)):
 		var input_remote := prior.duplicate(true)
 		input_remote["_received_msec"] = Time.get_ticks_msec()
-		input_remote["skin"] = _validated_multiplayer_skin(payload.get("skin", prior.get("skin", {})))
+		input_remote["skin"] = _validated_multiplayer_skin(payload.get("skin", prior.get("skin", {})), prior.get("skin", {}))
 		input_remote["equipment_slots"] = _validated_multiplayer_equipment(payload.get("equipment_slots", prior.get("equipment_slots", {})))
 		_remote_players[player_id] = input_remote
 		game_view.remote_players = _remote_players
@@ -976,7 +987,7 @@ func _accept_remote_player_snapshot(player_id: String, raw_payload: Variant) -> 
 		"health": int(prior.get("health", WorldSim.MAX_PLAYER_HEALTH)) if stale_after_respawn else clampi(int(payload.get("health", prior.get("health", WorldSim.MAX_PLAYER_HEALTH))), 0, WorldSim.MAX_PLAYER_HEALTH),
 		"nourishment": int(prior.get("nourishment", WorldSim.MAX_NOURISHMENT)) if stale_after_respawn else clampi(int(payload.get("nourishment", prior.get("nourishment", WorldSim.MAX_NOURISHMENT))), 0, WorldSim.MAX_NOURISHMENT),
 		"respawn_revision": authoritative_respawn_revision,
-		"skin": _validated_multiplayer_skin(payload.get("skin", prior.get("skin", {}))),
+		"skin": _validated_multiplayer_skin(payload.get("skin", prior.get("skin", {})), prior.get("skin", {})),
 		"equipment_slots": _validated_multiplayer_equipment(payload.get("equipment_slots", prior.get("equipment_slots", {}))),
 	}
 	_store_remote_player_resume_state(player_id, _remote_players[player_id])
@@ -993,19 +1004,22 @@ func _store_remote_player_resume_state(player_id: String, remote: Dictionary) ->
 	var state: Dictionary = game_view.sim.multiplayer_player_states.get(player_id, {}).duplicate(true) if game_view.sim.multiplayer_player_states.get(player_id, {}) is Dictionary else {}
 	for key in ["x", "y", "facing", "on_ground", "health", "nourishment", "skin"]:
 		if remote.has(key):
-			state[key] = remote[key].duplicate(true) if remote[key] is Dictionary else remote[key]
+			state[key] = _validated_multiplayer_skin(remote[key], state.get("skin", {})) if key == "skin" else (remote[key].duplicate(true) if remote[key] is Dictionary else remote[key])
 	game_view.sim.multiplayer_player_states[player_id] = state
 
 
-func _validated_multiplayer_skin(raw_skin: Variant) -> Dictionary:
-	if not raw_skin is Dictionary:
-		return {}
+func _validated_multiplayer_skin(raw_skin: Variant, fallback_skin: Variant = {}) -> Dictionary:
+	var raw: Dictionary = raw_skin if raw_skin is Dictionary else {}
+	var fallback: Dictionary = fallback_skin if fallback_skin is Dictionary else {}
 	var skin: Dictionary = {}
 	for key: String in MULTIPLAYER_SKIN_KEYS:
-		var value := str((raw_skin as Dictionary).get(key, ""))
-		if value.length() > 16 or not Color.html_is_valid(value):
-			return {}
-		skin[key] = Color.from_string(value, Color.WHITE).to_html(false)
+		var value := str(raw.get(key, fallback.get(key, "")))
+		if value.length() <= 16 and Color.html_is_valid(value):
+			skin[key] = Color.from_string(value, Color.WHITE).to_html(false)
+	for key: String in MULTIPLAYER_SKIN_ENUMS:
+		var allowed_values: Array = MULTIPLAYER_SKIN_ENUMS[key]
+		var value := str(raw.get(key, fallback.get(key, allowed_values[0])))
+		skin[key] = value if allowed_values.has(value) else allowed_values[0]
 	return skin
 
 
