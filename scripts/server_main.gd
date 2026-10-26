@@ -4,6 +4,7 @@ extends Control
 # multiplayer host message handling from the official client, without GUI.
 
 const WorldSim = preload("res://gameplay/scripts/world.gd")
+const SpawnSelector = preload("res://scripts/community_spawn_selector.gd")
 const WorldStoreClass = preload("res://gameplay/scripts/world_store.gd")
 const EmojiReactionsClass = preload("res://gameplay/scripts/emoji_reactions.gd")
 const HEADLESS_SERVER_ARG := "--tinyblock-server"
@@ -49,6 +50,8 @@ const MULTIPLAYER_SKIN_ENUMS := {
 @onready var game_view: Node2D = $SubViewportContainer/SubViewport/GameView
 
 var _world_store := WorldStoreClass.new()
+var _community_spawn_allocations: Dictionary = {}
+var _first_join_spawn_attempted: Dictionary = {}
 var _world_started := false
 var _world_dirty := false
 var _autosave_timer := 0.0
@@ -169,14 +172,20 @@ func _start_headless_server() -> void:
 # ---------------------------------------------------------------------------
 
 func _boot_headless_world() -> void:
+	_first_join_spawn_attempted.clear()
 	var loaded := _world_store.load_world(_headless_world_id)
 	var started := false
 	if loaded.get("ok", false):
 		started = game_view.continue_world(loaded["state"])
+	var restored_saved_world := started
 	if not started:
 		started = game_view.start_new_world(_headless_world_mode, WorldSim.ACCESS_MODE_PUBLIC, true)
 		if started:
 			game_view.sim.world_id = _headless_world_id
+	if restored_saved_world:
+		_load_community_spawn_history(loaded["state"])
+	else:
+		_community_spawn_allocations.clear()
 	if not started:
 		push_error("Headless server could not load or create world %s" % _headless_world_id)
 		get_tree().quit(1)
@@ -674,6 +683,74 @@ func _multiplayer_projectile_snapshot() -> Array:
 # World snapshot transfer
 # ---------------------------------------------------------------------------
 
+static func _has_saved_spawn_position(raw: Variant) -> bool:
+	if not raw is Dictionary:
+		return false
+	var state := raw as Dictionary
+	for coordinate in ["x", "y"]:
+		if not state.get(coordinate, null) is float and not state.get(coordinate, null) is int:
+			return false
+		var value := float(state[coordinate])
+		if not is_finite(value) or absf(value) > WorldSim.COORD_LIMIT * BlockDefs.TILE:
+			return false
+	return true
+
+
+func _ensure_first_join_spawn(player_id: String) -> bool:
+	if not _headless_server or not _world_started or player_id.is_empty():
+		return false
+	var saved: Variant = game_view.sim.multiplayer_player_states.get(player_id, {})
+	if _has_saved_spawn_position(saved) or _has_saved_spawn_position(_remote_players.get(player_id, {})):
+		return false
+	if _first_join_spawn_attempted.has(player_id):
+		return false
+	_first_join_spawn_attempted[player_id] = true
+	var selection: Dictionary = SpawnSelector.select_spawn(game_view.sim, _remote_players, _community_spawn_allocations)
+	if selection.is_empty():
+		return false
+	var stand: Vector2i = selection["stand"]
+	var state: Dictionary = (saved as Dictionary).duplicate(true) if saved is Dictionary else {}
+	state.merge({
+		"x": float(stand.x * BlockDefs.TILE) + (BlockDefs.TILE - 20.0) * 0.5,
+		"y": float(stand.y * BlockDefs.TILE) - 28.0,
+		"vx": 0.0, "vy": 0.0, "on_ground": true,
+		"facing": int(state.get("facing", 1)),
+		"health": int(state.get("health", WorldSim.MAX_PLAYER_HEALTH)),
+		"nourishment": int(state.get("nourishment", WorldSim.MAX_NOURISHMENT)),
+		"respawn_revision": maxi(1, int(state.get("respawn_revision", 0)) + 1),
+	}, true)
+	game_view.sim.multiplayer_player_states[player_id] = state
+	_remote_respawn_protected_until_msec[player_id] = Time.get_ticks_msec() + 1000
+	var bucket := str(selection["bucket"])
+	_community_spawn_allocations[bucket] = int(_community_spawn_allocations.get(bucket, 0)) + 1
+	_mark_world_dirty()
+	print("Community first join spawn: player=%s stand=%s bucket=%s score=%.2f reason=%s" % [player_id, str(stand), bucket, float(selection.get("score", 0.0)), str(selection.get("reason", ""))])
+	return true
+
+
+func _load_community_spawn_history(state: Dictionary) -> void:
+	_community_spawn_allocations.clear()
+	var metadata: Variant = state.get("community_spawn", {})
+	if not metadata is Dictionary or int(metadata.get("version", 0)) != 1:
+		return
+	var allocations: Variant = metadata.get("allocations", {})
+	if not allocations is Dictionary:
+		return
+	for raw_key in allocations:
+		var key := str(raw_key)
+		if key.length() > 64 or not allocations[raw_key] is int and not allocations[raw_key] is float:
+			continue
+		var count := float(allocations[raw_key])
+		if is_finite(count) and count > 0:
+			_community_spawn_allocations[key] = mini(int(count), 1_000_000)
+
+
+func _serialize_community_world() -> Dictionary:
+	var state: Dictionary = game_view.sim.serialize_state()
+	state["community_spawn"] = {"version": 1, "allocations": _community_spawn_allocations.duplicate(true)}
+	return state
+
+
 func _send_world_snapshot(target_player_id: String) -> void:
 	if not MultiplayerClient.is_host() or target_player_id.is_empty():
 		return
@@ -682,6 +759,7 @@ func _send_world_snapshot(target_player_id: String) -> void:
 		var old_transfer: Dictionary = _snapshot_outgoing_transfers[raw_transfer_id]
 		if str(old_transfer.get("target_player_id", "")) == target_player_id:
 			_snapshot_outgoing_transfers.erase(raw_transfer_id)
+	_ensure_first_join_spawn(target_player_id)
 	var transfer_id := "snapshot_%d" % Time.get_ticks_msec()
 	var snapshot: Dictionary = game_view.sim.serialize_state()
 	snapshot["active_projectiles"] = _multiplayer_projectile_snapshot()
@@ -945,8 +1023,13 @@ static func stale_remote_player_ids(remote_players: Dictionary, now_msec: int, t
 func _accept_remote_player_snapshot(player_id: String, raw_payload: Variant) -> void:
 	if player_id.is_empty() or not raw_payload is Dictionary:
 		return
+	_ensure_first_join_spawn(player_id)
 	var payload := raw_payload as Dictionary
 	var prior: Dictionary = _remote_players.get(player_id, {})
+	if prior.is_empty():
+		var saved: Variant = game_view.sim.multiplayer_player_states.get(player_id, {})
+		if _has_saved_spawn_position(saved):
+			prior = (saved as Dictionary).duplicate(true)
 	if bool(prior.get("_input_authoritative", false)):
 		var input_remote := prior.duplicate(true)
 		input_remote["_received_msec"] = Time.get_ticks_msec()
@@ -1002,7 +1085,7 @@ func _store_remote_player_resume_state(player_id: String, remote: Dictionary) ->
 	if player_id.is_empty():
 		return
 	var state: Dictionary = game_view.sim.multiplayer_player_states.get(player_id, {}).duplicate(true) if game_view.sim.multiplayer_player_states.get(player_id, {}) is Dictionary else {}
-	for key in ["x", "y", "facing", "on_ground", "health", "nourishment", "skin"]:
+	for key in ["x", "y", "facing", "on_ground", "health", "nourishment", "skin", "respawn_revision"]:
 		if remote.has(key):
 			state[key] = _validated_multiplayer_skin(remote[key], state.get("skin", {})) if key == "skin" else (remote[key].duplicate(true) if remote[key] is Dictionary else remote[key])
 	game_view.sim.multiplayer_player_states[player_id] = state
@@ -1619,7 +1702,7 @@ func _save_world() -> void:
 		return
 	if int(game_view.sim.player.get("health", WorldSim.MAX_PLAYER_HEALTH)) <= 0:
 		return
-	if _world_store.save_current(game_view.sim.serialize_state()):
+	if _world_store.save_current(_serialize_community_world()):
 		_world_dirty = false
 		_autosave_timer = 0.0
 		_autosave_idle_timer = 0.0

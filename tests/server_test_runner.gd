@@ -10,6 +10,8 @@ var test_dir := "user://tinyblock-server-tests"
 
 
 func _ready() -> void:
+	failures += load("res://tests/community_spawn_selector_tests.gd").run_tests()
+	_test_first_join_spawn_contract()
 	_test_avatar_appearance_contract()
 	_test_headless_input_contract()
 	_test_loaded_host_low_bounce_takeoff()
@@ -414,5 +416,52 @@ func _test_avatar_appearance_contract() -> void:
 	_assert(legacy["body_shape"] == "classic" and legacy["particles"] == "none", "legacy appearances gain safe defaults")
 	var invalid: Dictionary = server._validated_multiplayer_skin({"skin": "x".repeat(1000), "body_shape": "giant", "particles": "lava", "unknown": true})
 	_assert(not invalid.has("skin") and not invalid.has("unknown") and invalid["body_shape"] == "classic" and invalid["particles"] == "none", "invalid avatar fields are bounded and sanitized")
+	server.free()
+	view.free()
+
+
+func _test_first_join_spawn_contract() -> void:
+	var server := ServerMainClass.new()
+	var view = load("res://gameplay/scripts/game_view.gd").new()
+	server.game_view = view
+	server._headless_server = true
+	server._world_started = true
+	var sim = view.sim
+	sim.world_id = "world_spawn_contract"
+	sim.world_mode = WorldSim.WORLD_MODE_SKYBLOCK
+	sim.default_spawn = Vector2i(0, 8)
+	for x in range(8, 29):
+		for y in range(8, 12):
+			sim.set_block(x, y, int(BlockDefs.BLOCKS.grass.id) if y == 8 else int(BlockDefs.BLOCKS.dirt.id))
+	sim.set_block(22, 7, int(BlockDefs.BLOCKS.wood.id))
+	sim.set_block(22, 6, int(BlockDefs.BLOCKS.wood.id))
+	var original_spawn: Vector2i = sim.default_spawn
+	sim.multiplayer_player_states["inventory-only"] = {"inventory": {"planks": 3}, "health": 9}
+	_assert(server._ensure_first_join_spawn("inventory-only"), "a player without saved coordinates receives a fresh safe position")
+	var allocated: Dictionary = sim.multiplayer_player_states["inventory-only"].duplicate(true)
+	_assert(float(allocated.get("x", 0)) > 200.0, "new player starts on intact ground away from the ruined center")
+	_assert(allocated.get("inventory", {}) == {"planks": 3} and int(allocated.get("health", 0)) == 9, "legacy inventory-only state retains items and health")
+	_assert(sim.default_spawn == original_spawn, "first join allocation does not move the shared respawn point")
+	var allocation_counts: Dictionary = server._community_spawn_allocations.duplicate(true)
+	_assert(not server._ensure_first_join_spawn("inventory-only") and server._community_spawn_allocations == allocation_counts, "snapshot retries do not move or count the same newcomer twice")
+	server._accept_remote_player_snapshot("inventory-only", {"x": 0.0, "y": 0.0, "respawn_revision": 0})
+	_assert(is_equal_approx(float(server._remote_players["inventory-only"]["x"]), float(allocated["x"])), "stale first client coordinates cannot undo the server-selected start")
+	_assert(int(server._remote_players["inventory-only"]["respawn_revision"]) > 0, "standard authoritative revision confirms the new start to clients")
+	sim.multiplayer_player_states["returning"] = {"x": -120.0, "y": 228.0, "inventory": {"wood": 4}}
+	_assert(not server._ensure_first_join_spawn("returning") and float(sim.multiplayer_player_states["returning"]["x"]) == -120.0, "returning players keep their saved position")
+	var persisted: Dictionary = JSON.parse_string(JSON.stringify(server._serialize_community_world()))
+	server._community_spawn_allocations.clear()
+	server._load_community_spawn_history(persisted)
+	_assert(server._community_spawn_allocations == allocation_counts, "allocation history survives JSON save/load across restart")
+	server._load_community_spawn_history({})
+	_assert(server._community_spawn_allocations.is_empty(), "another world or a legacy save does not inherit allocation history")
+	server._load_community_spawn_history({"community_spawn": {"version": 1, "allocations": {"valid": 2, "bad": "oops", "negative": -1}}})
+	_assert(server._community_spawn_allocations == {"valid": 2}, "malformed history counters are ignored")
+	_assert(not ServerMainClass._has_saved_spawn_position({"x": NAN, "y": 0}) and not ServerMainClass._has_saved_spawn_position({"x": "invalid", "y": 0}), "invalid legacy coordinates are not treated as a valid return location")
+	sim.world_mode = WorldSim.WORLD_MODE_ONE_BLOCK
+	var canonical_history := server._community_spawn_allocations.duplicate(true)
+	_assert(not server._ensure_first_join_spawn("canonical-new") and not server._ensure_first_join_spawn("canonical-new"), "canonical-mode joins and retries keep their original spawning")
+	_assert(server._first_join_spawn_attempted.has("canonical-new") and server._community_spawn_allocations == canonical_history, "failed or canonical selection is attempted only once per newcomer, without repeated frontier generation")
+
 	server.free()
 	view.free()

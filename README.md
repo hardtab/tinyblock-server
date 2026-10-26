@@ -97,6 +97,26 @@ Active servers appear automatically in the **Online Worlds** list of the officia
 
 Your server does not need pre-approval. It appears when its session is active and disappears after the session TTL expires. The server declares its own capacity with `--max-players`; ordinary player-hosted P2P worlds remain capped at 4.
 
+## First-join placement
+
+New players in Procedural, Skyblock, and Floating Islands worlds receive a
+server-selected safe start instead of always sharing the central spawn. The
+selector prefers intact walkable natural surface, nearby resources, fewer
+player-built blocks, and less crowding. It avoids fluids, burning ground,
+nearby hostile creatures, unsupported fragments, and blocked headroom.
+
+The server remembers first-join allocations in eight-tile buckets and retains
+that history in the save's `community_spawn` metadata. Procedural worlds may
+open at most one nearby unexplored chunk for a newcomer when existing areas
+are depleted or repeatedly used. Snapshot retries cannot repeatedly generate
+new chunks. Finite island modes use existing land only; One Block and Challenge
+keep their canonical starting rules.
+
+Returning players retain their saved positions and inventory. This does not
+move the world's shared respawn point or reset terrain. Selection is applied
+before the initial world snapshot and uses the existing authoritative position
+revision, so compatible clients do not require an update.
+
 ## Persistence
 
 World saves are stored under the Godot user data directory:
