@@ -51,6 +51,7 @@ const MULTIPLAYER_SKIN_ENUMS := {
 
 var _world_store := WorldStoreClass.new()
 var _community_spawn_allocations: Dictionary = {}
+var _community_player_spawns: Dictionary = {}
 var _first_join_spawn_attempted: Dictionary = {}
 var _world_started := false
 var _world_dirty := false
@@ -186,6 +187,7 @@ func _boot_headless_world() -> void:
 		_load_community_spawn_history(loaded["state"])
 	else:
 		_community_spawn_allocations.clear()
+		_community_player_spawns.clear()
 	if not started:
 		push_error("Headless server could not load or create world %s" % _headless_world_id)
 		get_tree().quit(1)
@@ -720,6 +722,7 @@ func _ensure_first_join_spawn(player_id: String) -> bool:
 		"respawn_revision": maxi(1, int(state.get("respawn_revision", 0)) + 1),
 	}, true)
 	game_view.sim.multiplayer_player_states[player_id] = state
+	_community_player_spawns[player_id] = {"x": stand.x, "y": stand.y}
 	_remote_respawn_protected_until_msec[player_id] = Time.get_ticks_msec() + 1000
 	var bucket := str(selection["bucket"])
 	_community_spawn_allocations[bucket] = int(_community_spawn_allocations.get(bucket, 0)) + 1
@@ -730,6 +733,7 @@ func _ensure_first_join_spawn(player_id: String) -> bool:
 
 func _load_community_spawn_history(state: Dictionary) -> void:
 	_community_spawn_allocations.clear()
+	_community_player_spawns.clear()
 	var metadata: Variant = state.get("community_spawn", {})
 	if not metadata is Dictionary or int(metadata.get("version", 0)) != 1:
 		return
@@ -743,12 +747,92 @@ func _load_community_spawn_history(state: Dictionary) -> void:
 		var count := float(allocations[raw_key])
 		if is_finite(count) and count > 0:
 			_community_spawn_allocations[key] = mini(int(count), 1_000_000)
+	var player_spawns: Variant = metadata.get("player_spawns", {})
+	if not player_spawns is Dictionary:
+		return
+	for raw_player_id in player_spawns:
+		var player_id := str(raw_player_id)
+		var raw_spawn: Variant = player_spawns[raw_player_id]
+		if player_id.is_empty() or player_id.length() > 128 or not raw_spawn is Dictionary:
+			continue
+		var spawn: Dictionary = raw_spawn
+		if not _has_valid_spawn_tile(spawn):
+			continue
+		_community_player_spawns[player_id] = {"x": int(spawn["x"]), "y": int(spawn["y"])}
 
 
 func _serialize_community_world() -> Dictionary:
 	var state: Dictionary = game_view.sim.serialize_state()
-	state["community_spawn"] = {"version": 1, "allocations": _community_spawn_allocations.duplicate(true)}
+	state["community_spawn"] = {
+		"version": 1,
+		"allocations": _community_spawn_allocations.duplicate(true),
+		"player_spawns": _community_player_spawns.duplicate(true),
+	}
 	return state
+
+
+static func _has_valid_spawn_tile(raw: Variant) -> bool:
+	if not raw is Dictionary:
+		return false
+	var spawn: Dictionary = raw
+	for coordinate in ["x", "y"]:
+		var value: Variant = spawn.get(coordinate, null)
+		if not value is int and not value is float:
+			return false
+		var number := float(value)
+		if not is_finite(number) or absf(number) > WorldSim.COORD_LIMIT or number != floorf(number):
+			return false
+	return true
+
+
+func _get_or_select_personal_spawn(player_id: String, player: Dictionary) -> Dictionary:
+	if player_id.is_empty() or game_view == null or game_view.sim == null:
+		return {}
+	if game_view.sim.world_mode in [WorldSim.WORLD_MODE_ONE_BLOCK, WorldSim.WORLD_MODE_CHALLENGE, WorldSim.WORLD_MODE_DUEL]:
+		return {}
+	var active_players := _remote_players.duplicate(true)
+	active_players.erase(player_id)
+	var saved_spawn: Variant = _community_player_spawns.get(player_id, {})
+	var preferred_anchor := Vector2i(SpawnSelector.NO_COORDINATE, SpawnSelector.NO_COORDINATE)
+	if _has_valid_spawn_tile(saved_spawn):
+		var saved_spawn_dict: Dictionary = saved_spawn
+		preferred_anchor = Vector2i(int(saved_spawn_dict["x"]), int(saved_spawn_dict["y"]))
+		if SpawnSelector.is_spawn_safe(game_view.sim, preferred_anchor, active_players):
+			return {"stand": preferred_anchor, "bucket": SpawnSelector.bucket_for_stand(preferred_anchor), "reason": "personal_checkpoint"}
+	elif _has_saved_spawn_position(player):
+		# Existing v0.2.27 users have a last position but no checkpoint marker.
+		# Use it only as a search anchor; the selector still has to find safe terrain.
+		preferred_anchor = Vector2i(
+			floori((float(player["x"]) + 10.0) / float(BlockDefs.TILE)),
+			floori((float(player["y"]) + 28.0) / float(BlockDefs.TILE)),
+		)
+	var selection: Dictionary = {}
+	for nearby_radius in [4.0, 8.0, 16.0, 32.0]:
+		selection = SpawnSelector.select_spawn(
+			game_view.sim,
+			active_players,
+			_community_spawn_allocations,
+			preferred_anchor,
+			nearby_radius
+		)
+		if not selection.is_empty():
+			break
+	if selection.is_empty():
+		selection = SpawnSelector.select_spawn(
+			game_view.sim,
+			active_players,
+			_community_spawn_allocations,
+			preferred_anchor
+		)
+	if selection.is_empty():
+		return {}
+	var stand: Vector2i = selection["stand"]
+	_community_player_spawns[player_id] = {"x": stand.x, "y": stand.y}
+	var bucket := str(selection.get("bucket", SpawnSelector.bucket_for_stand(stand)))
+	_community_spawn_allocations[bucket] = int(_community_spawn_allocations.get(bucket, 0)) + 1
+	_mark_world_dirty()
+	print("Community personal respawn selected: player=%s stand=%s bucket=%s reason=%s" % [player_id, str(stand), bucket, str(selection.get("reason", ""))])
+	return selection
 
 
 func _send_world_snapshot(target_player_id: String) -> void:
@@ -1187,15 +1271,30 @@ func _respawn_remote_player(player_id: String, requested_respawn_revision: int =
 	var authoritative_respawn_revision := int((_remote_players[player_id] as Dictionary).get("respawn_revision", 0))
 	if not should_accept_guest_defeat_request(authoritative_respawn_revision, requested_respawn_revision):
 		return
+	_perform_remote_player_respawn(player_id)
+
+
+func _perform_remote_player_respawn(player_id: String) -> void:
+	if not _remote_players.has(player_id):
+		return
 	_create_remote_player_death_cache(player_id)
 	var target: Dictionary = _remote_players[player_id]
+	var spawn_selection := _get_or_select_personal_spawn(player_id, target)
 	target["health"] = WorldSim.MAX_PLAYER_HEALTH
-	target["x"] = float(game_view.sim.player.get("x", 0.0)) + BlockDefs.TILE * 2.0
-	target["y"] = float(game_view.sim.player.get("y", 0.0))
+	if not spawn_selection.is_empty():
+		var stand: Vector2i = spawn_selection["stand"]
+		target["x"] = float(stand.x * BlockDefs.TILE) + (BlockDefs.TILE - 20.0) * 0.5
+		target["y"] = float(stand.y * BlockDefs.TILE) - 28.0
+		target["on_ground"] = true
+	else:
+		target["x"] = float(game_view.sim.player.get("x", 0.0)) + BlockDefs.TILE * 2.0
+		target["y"] = float(game_view.sim.player.get("y", 0.0))
+		target["on_ground"] = false
 	target["vx"] = 0.0
 	target["vy"] = 0.0
 	target["respawn_revision"] = int(target.get("respawn_revision", 0)) + 1
 	_remote_players[player_id] = target
+	_store_remote_player_resume_state(player_id, target)
 	_remote_respawn_protected_until_msec[player_id] = Time.get_ticks_msec() + 1000
 	game_view.remote_players = _remote_players
 	var targeted_players: Dictionary = {}

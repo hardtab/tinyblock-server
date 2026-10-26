@@ -36,21 +36,40 @@ const RESOURCE_BLOCK_NAMES := [
 
 ## Selects a safe per-player starting stand. `stand` is the supporting tile.
 ## The caller owns persistence of the returned bucket count and placement.
-static func select_spawn(world: Object, active_players: Dictionary, allocations: Dictionary) -> Dictionary:
+static func select_spawn(
+	world: Object,
+	active_players: Dictionary,
+	allocations: Dictionary,
+	preferred_anchor: Vector2i = Vector2i(NO_COORDINATE, NO_COORDINATE),
+	maximum_distance_blocks: float = -1.0
+) -> Dictionary:
 	if world == null or not world.has_method("get_block"):
 		return {}
 	var mode := str(world.get("world_mode"))
 	if mode in [WorldSim.WORLD_MODE_ONE_BLOCK, WorldSim.WORLD_MODE_CHALLENGE, WorldSim.WORLD_MODE_DUEL]:
 		return {}
-	var anchor := _selection_anchor(world, active_players, allocations)
+	var anchor := preferred_anchor
+	if anchor.x == NO_COORDINATE or anchor.y == NO_COORDINATE:
+		anchor = _selection_anchor(world, active_players, allocations)
 	if mode == WorldSim.WORLD_MODE_PROCEDURAL:
-		return _select_procedural(world, active_players, allocations, anchor)
+		return _select_procedural(world, active_players, allocations, anchor, maximum_distance_blocks)
 	if mode in [WorldSim.WORLD_MODE_SKYBLOCK, WorldSim.WORLD_MODE_FLOATING_ISLANDS]:
-		return _select_finite(world, mode, active_players, allocations, anchor)
+		return _select_finite(world, mode, active_players, allocations, anchor, maximum_distance_blocks)
 	return {}
 
 
-static func _select_procedural(world: Object, active_players: Dictionary, allocations: Dictionary, anchor: Vector2i) -> Dictionary:
+## Validates a stored supporting tile against current terrain, hazards and players.
+static func is_spawn_safe(world: Object, stand: Vector2i, active_players: Dictionary) -> bool:
+	if world == null:
+		return false
+	if not _candidate_is_safe(world, stand, active_players):
+		return false
+	var mode := str(world.get("world_mode"))
+	var expected_name := _expected_surface_name(world, mode, stand.x, stand.y)
+	return not _surface_profile(world, stand, stand.y, expected_name).is_empty()
+
+
+static func _select_procedural(world: Object, active_players: Dictionary, allocations: Dictionary, anchor: Vector2i, maximum_distance_blocks: float = -1.0) -> Dictionary:
 	if not world.has_method("_terrain_surface_y") or not world.has_method("ensure_generated_chunk"):
 		return {}
 	var anchor_chunk := floori(float(anchor.x) / float(WorldSim.CHUNK_WIDTH))
@@ -73,6 +92,8 @@ static func _select_procedural(world: Object, active_players: Dictionary, alloca
 			focus_chunk,
 			focus_chunk
 		))
+	if maximum_distance_blocks > 0.0:
+		existing = _filter_candidates_by_distance(existing, maximum_distance_blocks)
 	var best_existing := _best_candidate(existing, anchor)
 	var best_unallocated_quality := _best_candidate(
 		_filter_candidates(existing, true, true),
@@ -80,6 +101,8 @@ static func _select_procedural(world: Object, active_players: Dictionary, alloca
 	)
 	if not best_unallocated_quality.is_empty():
 		return _public_result(best_unallocated_quality, "procedural_existing")
+	if maximum_distance_blocks > 0.0:
+		return _public_result(best_existing, "procedural_existing") if not best_existing.is_empty() else {}
 	var should_expand := (
 		best_existing.is_empty()
 		or not _is_good_procedural_candidate(best_existing)
@@ -162,7 +185,7 @@ static func _collect_procedural_candidates(
 	return candidates
 
 
-static func _select_finite(world: Object, mode: String, active_players: Dictionary, allocations: Dictionary, anchor: Vector2i) -> Dictionary:
+static func _select_finite(world: Object, mode: String, active_players: Dictionary, allocations: Dictionary, anchor: Vector2i, maximum_distance_blocks: float = -1.0) -> Dictionary:
 	var candidates: Array[Dictionary] = []
 	if mode == WorldSim.WORLD_MODE_SKYBLOCK:
 		var first_x := anchor.x - FINITE_SKYBLOCK_RADIUS_X
@@ -211,10 +234,20 @@ static func _select_finite(world: Object, mode: String, active_players: Dictiona
 					allocations,
 					"finite"
 				)
+	if maximum_distance_blocks > 0.0:
+		candidates = _filter_candidates_by_distance(candidates, maximum_distance_blocks)
 	var best := _best_candidate(candidates, anchor)
 	if best.is_empty():
 		return {}
 	return _public_result(best, "finite_island")
+
+
+static func _filter_candidates_by_distance(candidates: Array[Dictionary], maximum_distance_blocks: float) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for candidate: Dictionary in candidates:
+		if float(candidate.get("anchor_distance", INF)) <= maximum_distance_blocks:
+			result.append(candidate)
+	return result
 
 
 static func _append_column_candidates(

@@ -112,10 +112,14 @@ are depleted or repeatedly used. Snapshot retries cannot repeatedly generate
 new chunks. Finite island modes use existing land only; One Block and Challenge
 keep their canonical starting rules.
 
-Returning players retain their saved positions and inventory. This does not
-move the world's shared respawn point or reset terrain. Selection is applied
-before the initial world snapshot and uses the existing authoritative position
-revision, so compatible clients do not require an update.
+Returning players retain their saved positions and inventory. Each selected
+start also becomes that player's personal respawn checkpoint, stored separately
+in `community_spawn.player_spawns` so it survives reconnects and server restarts.
+If a checkpoint becomes unsafe, the server searches nearby before selecting a
+replacement. Existing players without a checkpoint receive one at their next
+death without being moved on login. This does not move the world's shared
+respawn point or reset terrain. Placement uses the existing authoritative
+position revision, so compatible clients do not require an update.
 
 ## Persistence
 

@@ -4,6 +4,7 @@ const WorldSim = preload("res://gameplay/scripts/world.gd")
 const WorldStoreClass = preload("res://gameplay/scripts/world_store.gd")
 const MultiplayerClientClass = preload("res://gameplay/scripts/multiplayer_client.gd")
 const ServerMainClass = preload("res://scripts/server_main.gd")
+const SpawnSelector = preload("res://scripts/community_spawn_selector.gd")
 
 var failures := 0
 var test_dir := "user://tinyblock-server-tests"
@@ -441,6 +442,8 @@ func _test_first_join_spawn_contract() -> void:
 	var allocated: Dictionary = sim.multiplayer_player_states["inventory-only"].duplicate(true)
 	_assert(float(allocated.get("x", 0)) > 200.0, "new player starts on intact ground away from the ruined center")
 	_assert(allocated.get("inventory", {}) == {"planks": 3} and int(allocated.get("health", 0)) == 9, "legacy inventory-only state retains items and health")
+	var allocated_checkpoint: Dictionary = server._community_player_spawns.get("inventory-only", {})
+	_assert(allocated_checkpoint == {"x": floori((float(allocated["x"]) + 10.0) / float(BlockDefs.TILE)), "y": floori((float(allocated["y"]) + 28.0) / float(BlockDefs.TILE))}, "first join pins a personal supporting tile")
 	_assert(sim.default_spawn == original_spawn, "first join allocation does not move the shared respawn point")
 	var allocation_counts: Dictionary = server._community_spawn_allocations.duplicate(true)
 	_assert(not server._ensure_first_join_spawn("inventory-only") and server._community_spawn_allocations == allocation_counts, "snapshot retries do not move or count the same newcomer twice")
@@ -451,14 +454,80 @@ func _test_first_join_spawn_contract() -> void:
 	_assert(not server._ensure_first_join_spawn("returning") and float(sim.multiplayer_player_states["returning"]["x"]) == -120.0, "returning players keep their saved position")
 	var persisted: Dictionary = JSON.parse_string(JSON.stringify(server._serialize_community_world()))
 	server._community_spawn_allocations.clear()
+	server._community_player_spawns.clear()
 	server._load_community_spawn_history(persisted)
 	_assert(server._community_spawn_allocations == allocation_counts, "allocation history survives JSON save/load across restart")
+	_assert(server._community_player_spawns["inventory-only"] == allocated_checkpoint, "personal checkpoint survives the server-only save metadata")
+	var restored_view = load("res://gameplay/scripts/game_view.gd").new()
+	_assert(restored_view.sim.deserialize_state(persisted), "a fresh world instance reloads before personal respawn")
+	var restored_server := ServerMainClass.new()
+	restored_server.game_view = restored_view
+	restored_server._world_started = true
+	restored_server._load_community_spawn_history(persisted)
+	restored_view.sim.keep_inventory_on_death = true
+	restored_server._remote_players["inventory-only"] = {
+		"x": 0.0, "y": 0.0, "health": 0, "respawn_revision": 4,
+	}
+	restored_server._perform_remote_player_respawn("inventory-only")
+	var restored_target: Dictionary = restored_server._remote_players["inventory-only"]
+	var respawned_tile := Vector2i(
+		floori((float(restored_target["x"]) + 10.0) / float(BlockDefs.TILE)),
+		floori((float(restored_target["y"]) + 28.0) / float(BlockDefs.TILE)),
+	)
+	_assert(respawned_tile == Vector2i(int(allocated_checkpoint["x"]), int(allocated_checkpoint["y"])), "death after restart returns a new player to the same personal checkpoint")
+	_assert(int(restored_target["respawn_revision"]) == 5 and int(restored_target["health"]) == WorldSim.MAX_PLAYER_HEALTH, "the personal respawn is authoritative and increments the normal revision")
+	var original_checkpoint := Vector2i(int(allocated_checkpoint["x"]), int(allocated_checkpoint["y"]))
+	restored_view.sim.set_block(original_checkpoint.x, original_checkpoint.y, 0)
+	restored_view.sim.set_block(original_checkpoint.x, original_checkpoint.y - 1, int(BlockDefs.BLOCKS.stone.id))
+	restored_view.sim.set_block(original_checkpoint.x, original_checkpoint.y - 2, int(BlockDefs.BLOCKS.stone.id))
+	restored_server._perform_remote_player_respawn("inventory-only")
+	var replacement_target: Dictionary = restored_server._remote_players["inventory-only"]
+	var replacement := Vector2i(
+		floori((float(replacement_target["x"]) + 10.0) / float(BlockDefs.TILE)),
+		floori((float(replacement_target["y"]) + 28.0) / float(BlockDefs.TILE)),
+	)
+	_assert(replacement != original_checkpoint and original_checkpoint.distance_to(replacement) <= 4.0, "a destroyed personal checkpoint is replaced with nearby safe terrain")
+	_assert(SpawnSelector.is_spawn_safe(restored_view.sim, replacement, {}), "replacement checkpoint remains free of hazards and obstructions")
+	_assert(restored_server._community_player_spawns["inventory-only"] == {"x": replacement.x, "y": replacement.y}, "the repaired checkpoint is saved for future deaths")
+	restored_server.free()
+	restored_view.free()
+
+	# v0.2.27 players have no marker. Their death location is only a search
+	# anchor; the selector chooses a safe tile before the server moves them.
+	var legacy_server := ServerMainClass.new()
+	var legacy_view = load("res://gameplay/scripts/game_view.gd").new()
+	legacy_server.game_view = legacy_view
+	_assert(legacy_view.sim.deserialize_state(persisted), "legacy respawn test restores the same world")
+	legacy_view.sim.keep_inventory_on_death = true
+	legacy_server._world_started = true
+	legacy_server._load_community_spawn_history(persisted)
+	legacy_server._community_player_spawns.erase("legacy-v027")
+	legacy_server._remote_players["legacy-v027"] = {
+		"x": float(original_spawn.x * BlockDefs.TILE),
+		"y": float(original_spawn.y * BlockDefs.TILE) - 28.0,
+		"health": 0,
+		"respawn_revision": 0,
+	}
+	var legacy_death_x := float(legacy_server._remote_players["legacy-v027"]["x"])
+	legacy_server._perform_remote_player_respawn("legacy-v027")
+	var legacy_target: Dictionary = legacy_server._remote_players["legacy-v027"]
+	var legacy_tile := Vector2i(
+		floori((float(legacy_target["x"]) + 10.0) / float(BlockDefs.TILE)),
+		floori((float(legacy_target["y"]) + 28.0) / float(BlockDefs.TILE)),
+	)
+	_assert(float(legacy_target["x"]) != legacy_death_x and legacy_server._community_player_spawns.has("legacy-v027"), "an old player gets a selected checkpoint at first death without being moved on join")
+	_assert(SpawnSelector.is_spawn_safe(legacy_view.sim, legacy_tile, {}), "legacy first-death checkpoint is safe")
+	legacy_server.free()
+	legacy_view.free()
 	server._load_community_spawn_history({})
 	_assert(server._community_spawn_allocations.is_empty(), "another world or a legacy save does not inherit allocation history")
+	_assert(server._community_player_spawns.is_empty(), "another world or a legacy save does not inherit personal checkpoints")
 	server._load_community_spawn_history({"community_spawn": {"version": 1, "allocations": {"valid": 2, "bad": "oops", "negative": -1}}})
 	_assert(server._community_spawn_allocations == {"valid": 2}, "malformed history counters are ignored")
 	_assert(not ServerMainClass._has_saved_spawn_position({"x": NAN, "y": 0}) and not ServerMainClass._has_saved_spawn_position({"x": "invalid", "y": 0}), "invalid legacy coordinates are not treated as a valid return location")
 	sim.world_mode = WorldSim.WORLD_MODE_ONE_BLOCK
+	server._community_player_spawns["canonical-new"] = {"x": 22, "y": 8}
+	_assert(server._get_or_select_personal_spawn("canonical-new", {"x": 0.0, "y": 0.0}).is_empty(), "personal community checkpoints do not override One Block canonical respawns")
 	var canonical_history := server._community_spawn_allocations.duplicate(true)
 	_assert(not server._ensure_first_join_spawn("canonical-new") and not server._ensure_first_join_spawn("canonical-new"), "canonical-mode joins and retries keep their original spawning")
 	_assert(server._first_join_spawn_attempted.has("canonical-new") and server._community_spawn_allocations == canonical_history, "failed or canonical selection is attempted only once per newcomer, without repeated frontier generation")
