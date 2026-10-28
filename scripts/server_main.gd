@@ -44,7 +44,7 @@ const MULTIPLAYER_SKIN_ENUMS := {
 	"antenna": ["none", "sprout", "twin"],
 	"arms": ["classic", "long", "tiny"],
 	"legs": ["classic", "short", "spring"],
-	"particles": ["none", "flowers", "fireflies", "stars", "sparks", "fire"],
+	"particles": ["none", "flowers", "fireflies", "stars", "sparks", "fire", "garon"],
 }
 
 @onready var game_view: Node2D = $SubViewportContainer/SubViewport/GameView
