@@ -402,7 +402,7 @@ func _test_avatar_appearance_contract() -> void:
 		"skin": "#70402d", "shirt": "#ed5926", "shirt_dark": "#a72e18",
 		"accent": "#ffd35a", "pants": "#34252c", "hair": "#24191c",
 		"body_shape": "boxy", "face": "mustache", "antenna": "twin",
-		"arms": "long", "legs": "spring", "particles": "garon",
+		"arms": "long", "legs": "spring", "particles": "garon", "outfit": "garon",
 	}
 	var expected: Dictionary = server._validated_multiplayer_skin(skin)
 	for key in ServerMainClass.MULTIPLAYER_SKIN_ENUMS:
@@ -414,9 +414,9 @@ func _test_avatar_appearance_contract() -> void:
 	server._accept_remote_player_snapshot("avatar-test", {"skin": {"particles": "stars"}})
 	_assert(server._remote_players["avatar-test"]["skin"]["particles"] == "stars" and server._remote_players["avatar-test"]["skin"]["body_shape"] == "boxy", "input-authoritative appearance updates retain prior valid options")
 	var legacy: Dictionary = server._validated_multiplayer_skin({"skin": "#70402d"})
-	_assert(legacy["body_shape"] == "classic" and legacy["particles"] == "none", "legacy appearances gain safe defaults")
-	var invalid: Dictionary = server._validated_multiplayer_skin({"skin": "x".repeat(1000), "body_shape": "giant", "particles": "lava", "unknown": true})
-	_assert(not invalid.has("skin") and not invalid.has("unknown") and invalid["body_shape"] == "classic" and invalid["particles"] == "none", "unknown particle styles and invalid avatar fields are rejected")
+	_assert(legacy["body_shape"] == "classic" and legacy["particles"] == "none" and legacy["outfit"] == "classic", "legacy appearances gain safe defaults")
+	var invalid: Dictionary = server._validated_multiplayer_skin({"skin": "x".repeat(1000), "body_shape": "giant", "particles": "lava", "outfit": "invalid", "unknown": true})
+	_assert(not invalid.has("skin") and not invalid.has("unknown") and invalid["body_shape"] == "classic" and invalid["particles"] == "none" and invalid["outfit"] == "classic", "unknown particle styles and invalid avatar fields are rejected")
 	server.free()
 	view.free()
 

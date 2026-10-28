@@ -39,6 +39,7 @@ const INVENTORY_RESEND_ATTEMPTS := 5
 const REMOTE_PLAYER_STALE_TIMEOUT_MSEC := 30_000
 const MULTIPLAYER_SKIN_KEYS := ["skin", "shirt", "shirt_dark", "accent", "pants", "hair"]
 const MULTIPLAYER_SKIN_ENUMS := {
+	"outfit": ["classic", "garon"],
 	"body_shape": ["classic", "round", "boxy"],
 	"face": ["none", "mustache", "whiskers"],
 	"antenna": ["none", "sprout", "twin"],
