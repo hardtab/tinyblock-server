@@ -11,6 +11,7 @@ jobs:
     name: Test and build server
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, hardtab-linux-build]
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -103,12 +104,16 @@ jobs:
           if [[ -n "${GODOT_SETUP_TMP:-}" && "$GODOT_SETUP_TMP" == "$RUNNER_TEMP"/tinyblock-server-godot.* ]]; then
             rm -rf -- "$GODOT_SETUP_TMP"
           fi
+          rm -rf -- .godot build/export build/package \
+            build/tinyblock-server-linux-x86_64.tar.gz \
+            build/tinyblock-server-linux-x86_64.tar.gz.sha256
 
   release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: [self-hosted, Linux, X64, hardtab-linux-build]
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -125,3 +130,7 @@ jobs:
             release/tinyblock-server-linux-x86_64.tar.gz
             release/tinyblock-server-linux-x86_64.tar.gz.sha256
           generate_release_notes: true
+
+      - name: Remove downloaded release files
+        if: always()
+        run: rm -rf -- release
